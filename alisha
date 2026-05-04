@@ -1,0 +1,297 @@
+#!/home/van/tools/alisha/venv/bin/python3
+"""
+alisha: streaming terminal assistant backed by the OpenAI Responses API.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+from typing import Any
+
+from openai import OpenAI
+
+
+DEFAULT_CONFIG: dict[str, Any] = {
+    "model": "gpt-5-nano",
+    "max_output_tokens": 1200,
+    "temperature": None,
+    "top_p": None,
+    "reasoning": None,
+    "truncation": "disabled",
+    "stream": True,
+    "file_context_max_bytes": 200000,
+    "system_prompt": (
+        "You are a terminal assistant running inside WSL, your name is Alisha.\n"
+        "Be concise and practical.\n"
+        "When giving shell commands:\n"
+        "- Prefer safe defaults, and quote variables where appropriate.\n"
+        "- Explain destructive steps.\n"
+        "- Format commands in fenced code blocks.\n"
+        "If the user provides logs or errors, focus on diagnosis steps and likely fixes."
+    ),
+}
+
+CONFIGURABLE_RESPONSE_PARAMS = (
+    "temperature",
+    "top_p",
+    "reasoning",
+    "truncation",
+    "service_tier",
+    "text",
+    "metadata",
+    "parallel_tool_calls",
+    "store",
+)
+
+
+class CliError(Exception):
+    """Expected command-line/configuration error."""
+
+
+def default_config_path() -> Path:
+    return Path(__file__).resolve().with_name("config.json")
+
+
+def load_config(path: Path) -> dict[str, Any]:
+    config = dict(DEFAULT_CONFIG)
+
+    if not path.exists():
+        return config
+
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            user_config = json.load(handle)
+    except json.JSONDecodeError as exc:
+        raise CliError(f"Invalid JSON in config {path}: {exc}") from exc
+    except OSError as exc:
+        raise CliError(f"Unable to read config {path}: {exc}") from exc
+
+    if not isinstance(user_config, dict):
+        raise CliError(f"Config {path} must contain a JSON object.")
+
+    config.update(user_config)
+    return config
+
+
+def positive_int(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise CliError(f"{name} must be a positive integer.")
+    return value
+
+
+def validate_config(config: dict[str, Any]) -> dict[str, Any]:
+    config = dict(config)
+
+    if not isinstance(config.get("model"), str) or not config["model"].strip():
+        raise CliError("model must be a non-empty string.")
+
+    config["max_output_tokens"] = positive_int(
+        config.get("max_output_tokens"), "max_output_tokens"
+    )
+
+    max_bytes = config.get("file_context_max_bytes")
+    if max_bytes is not None:
+        config["file_context_max_bytes"] = positive_int(
+            max_bytes, "file_context_max_bytes"
+        )
+
+    if not isinstance(config.get("system_prompt"), str):
+        raise CliError("system_prompt must be a string.")
+
+    if not isinstance(config.get("stream"), bool):
+        raise CliError("stream must be true or false.")
+
+    return config
+
+
+def read_all_stdin() -> str:
+    if sys.stdin.isatty():
+        return ""
+    return sys.stdin.read()
+
+
+def read_text_file(path_text: str, max_bytes: int | None) -> tuple[str, bool]:
+    path = Path(path_text).expanduser()
+
+    if not path.exists():
+        raise CliError(f"File not found: {path_text}")
+    if not path.is_file():
+        raise CliError(f"Not a regular file: {path_text}")
+
+    try:
+        with path.open("rb") as handle:
+            data = handle.read(max_bytes + 1 if max_bytes is not None else -1)
+    except OSError as exc:
+        raise CliError(f"Unable to read file {path_text}: {exc}") from exc
+
+    truncated = max_bytes is not None and len(data) > max_bytes
+    if truncated:
+        data = data[:max_bytes]
+
+    return data.decode("utf-8", errors="replace"), truncated
+
+
+def build_user_content(
+    prompt_parts: list[str],
+    file_paths: list[str],
+    stdin_text: str,
+    include_stdin: bool,
+    file_context_max_bytes: int | None,
+) -> str:
+    question = " ".join(prompt_parts).strip()
+    sections: list[str] = []
+
+    if question:
+        sections.append(f"--- question ---\n{question}")
+
+    for path_text in file_paths:
+        content, truncated = read_text_file(path_text, file_context_max_bytes)
+        marker = " truncated" if truncated else ""
+        sections.append(
+            f"--- file: {path_text}{marker} ---\n{content.rstrip()}"
+        )
+
+    if include_stdin and stdin_text:
+        sections.append(f"--- stdin ---\n{stdin_text.rstrip()}")
+
+    if not question and not include_stdin:
+        raise CliError("No prompt provided. Add a question or pipe stdin.")
+
+    if not sections:
+        raise CliError("No usable prompt, file context, or stdin content provided.")
+
+    return "\n\n".join(sections).strip()
+
+
+def response_params(config: dict[str, Any]) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "model": config["model"],
+        "max_output_tokens": config["max_output_tokens"],
+    }
+
+    for name in CONFIGURABLE_RESPONSE_PARAMS:
+        if name in config and config[name] is not None:
+            params[name] = config[name]
+
+    return params
+
+
+def print_non_streamed_response(response: Any) -> None:
+    output_text = getattr(response, "output_text", None)
+    if output_text:
+        print(output_text)
+        return
+
+    for item in getattr(response, "output", []) or []:
+        for content in getattr(item, "content", []) or []:
+            text = getattr(content, "text", None)
+            if text:
+                sys.stdout.write(text)
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+
+
+def run_openai_request(config: dict[str, Any], user_content: str) -> int:
+    if not os.getenv("OPENAI_API_KEY"):
+        print("ERROR: OPENAI_API_KEY is not set.", file=sys.stderr)
+        print('Set it with: export OPENAI_API_KEY="sk-..."', file=sys.stderr)
+        return 2
+
+    client = OpenAI()
+    params = response_params(config)
+    params["input"] = [
+        {"role": "system", "content": config["system_prompt"]},
+        {"role": "user", "content": user_content},
+    ]
+
+    try:
+        if config["stream"]:
+            stream = client.responses.create(**params, stream=True)
+            for event in stream:
+                if event.type == "response.output_text.delta":
+                    sys.stdout.write(event.delta)
+                    sys.stdout.flush()
+                elif event.type == "response.error":
+                    print(f"\n[OpenAI error] {event.error}", file=sys.stderr)
+                    return 1
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+        else:
+            response = client.responses.create(**params)
+            print_non_streamed_response(response)
+        return 0
+    except KeyboardInterrupt:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        return 130
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="alisha", add_help=True)
+    parser.add_argument(
+        "prompt",
+        nargs="*",
+        help="Prompt text. If omitted, stdin can be used as the prompt.",
+    )
+    parser.add_argument(
+        "-f",
+        "--file",
+        dest="files",
+        action="append",
+        default=[],
+        help="Text file to send as context. May be repeated.",
+    )
+    parser.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Force reading stdin and append it to the prompt/context.",
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=default_config_path(),
+        help="Path to config.json.",
+    )
+    parser.add_argument("--model", help="Override the configured model.")
+    parser.add_argument(
+        "--m",
+        "--max-output",
+        dest="max_output",
+        type=int,
+        help="Override configured max output tokens.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv if argv is not None else sys.argv[1:])
+
+    try:
+        config = load_config(args.config)
+        if args.model:
+            config["model"] = args.model
+        if args.max_output is not None:
+            config["max_output_tokens"] = args.max_output
+        config = validate_config(config)
+
+        stdin_text = read_all_stdin()
+        include_stdin = bool(args.stdin or (not args.prompt and stdin_text))
+        user_content = build_user_content(
+            prompt_parts=args.prompt,
+            file_paths=args.files,
+            stdin_text=stdin_text,
+            include_stdin=include_stdin,
+            file_context_max_bytes=config["file_context_max_bytes"],
+        )
+        return run_openai_request(config, user_content)
+    except CliError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
