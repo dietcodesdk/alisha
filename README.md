@@ -1,13 +1,14 @@
 # Alisha
 
-Alisha is a small terminal assistant command backed by the OpenAI Responses API.
+Alisha is a small terminal assistant command backed by Portkey's
+OpenAI-compatible Chat Completions API.
 It streams answers to stdout and can include local text files as context.
 
 ## Requirements
 
 - Python virtualenv at `./venv`
 - `openai` Python package installed in that virtualenv
-- `OPENAI_API_KEY` exported in the shell
+- `PORTKEY_API_KEY` exported in the shell
 
 ## Usage
 
@@ -30,17 +31,41 @@ Runtime defaults live in `config.json` beside the script.
 
 Important fields:
 
-- `model`: OpenAI model used by default.
-- `max_output_tokens`: output token cap.
-- `stream`: whether to stream Responses API output.
+- `base_url`: Portkey-compatible API base URL.
+- `api_key_env`: environment variable containing the Portkey API key.
+- `model`: Portkey model route used by default.
+- `max_completion_tokens`: output token cap for Chat Completions.
+- `reasoning_effort`: reasoning level for compatible models, such as `high`.
+- `stream`: whether to stream Chat Completions output.
 - `file_context_max_bytes`: per-file context read limit.
 - `system_prompt`: assistant behavior instructions.
 
 CLI flags override config values for a single run:
 
 ```sh
-alisha --model gpt-5-nano --m 400 "answer briefly"
+alisha --model @personal-openai/gpt-5-mini --m 400 "answer briefly"
+alisha --reasoning-effort high --m 5000 "solve carefully"
 alisha --config ./other-config.json "use alternate defaults"
+```
+
+For high reasoning with this Portkey Chat Completions route, set:
+
+```json
+"reasoning_effort": "high"
+```
+
+## Shell Setup
+
+Add this to `~/.zshrc`, replacing the placeholder with your actual key:
+
+```sh
+export PORTKEY_API_KEY="..."
+```
+
+Then reload your shell:
+
+```sh
+source ~/.zshrc
 ```
 
 ## Install
@@ -62,4 +87,4 @@ sudo ln -s /home/van/tools/alisha/alisha /usr/local/bin/alisha
 ./alisha -f README.md "summarize"
 ```
 
-The final check requires `OPENAI_API_KEY`.
+The final check requires `PORTKEY_API_KEY`.

@@ -15,3 +15,19 @@
 
 - Consider adding tests if this grows beyond a single script.
 - Consider rich file handling later, but v1 intentionally supports only text.
+
+## 2026-05-05 Portkey Refactor
+
+- Global `/usr/local/bin/alisha` is now a symlink to
+  `/home/van/tools/alisha/alisha`, so project-local edits update the installed
+  command.
+- Refactored from OpenAI Responses API to Portkey's OpenAI-compatible Chat
+  Completions endpoint.
+- Do not hardcode Portkey keys; runtime auth comes from `PORTKEY_API_KEY`.
+- The OpenAI Python SDK uses lowercase `max_tokens` or
+  `max_completion_tokens`; uppercase `MAX_TOKENS` is not a valid Python SDK
+  argument.
+- The configured Portkey GPT-5 route rejects Chat Completions `max_tokens`;
+  use `max_completion_tokens` for `--m/--max-output`.
+- Added `--reasoning-effort` for per-request overrides while keeping high
+  reasoning as the default config.

@@ -14,7 +14,7 @@ terminal
 config.json + prompt/stdin/text files
   |
   v
-OpenAI Responses API
+Portkey OpenAI-compatible Chat Completions API
   |
   v
 streamed stdout
@@ -23,9 +23,10 @@ streamed stdout
 ## Key Modules
 
 - `alisha`: executable Python script containing CLI parsing, config loading,
-  file/stdin context assembly, and OpenAI request handling.
-- `config.json`: default model, output limit, streaming behavior, file context
-  limit, and system prompt.
+  file/stdin context assembly, and Portkey request handling.
+- `config.json`: default model, max completion token limit, reasoning effort,
+  streaming behavior, file context limit, Portkey base URL, API key environment
+  variable, and system prompt.
 - `venv`: local Python virtualenv used by the script shebang.
 
 ## Data Flow
@@ -36,14 +37,14 @@ streamed stdout
 4. Optionally read stdin.
 5. Build one labeled user content payload containing the question, file
    context, and stdin context.
-6. Send system and user content to `client.responses.create`.
-7. Stream `response.output_text.delta` events to stdout.
+6. Send system and user messages to `client.chat.completions.create`.
+7. Stream `choices[].delta.content` chunks to stdout.
 
 ## Invariants And Constraints
 
 - File context is text-only in v1.
 - Secrets are not stored in this repository; the API key comes from
-  `OPENAI_API_KEY`.
+  `PORTKEY_API_KEY` by default.
 - Missing files, directories, invalid config, and absent prompt/stdin are
   expected CLI errors and exit with code `2`.
 - The global command should point at the project-local script rather than
@@ -52,5 +53,5 @@ streamed stdout
 ## External Dependencies
 
 - OpenAI Python SDK in `./venv`.
-- OpenAI Responses API.
+- Portkey OpenAI-compatible Chat Completions endpoint.
 - Shell PATH containing `/usr/local/bin`.
