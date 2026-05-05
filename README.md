@@ -14,6 +14,9 @@ It streams answers to stdout and can include local text files as context.
 
 ```sh
 alisha "explain this error"
+alisha --lo "what is the git command to switch branches?"
+alisha --med -f app.py "review this file"
+alisha --hi --m 8000 "design this carefully"
 alisha -f app.py "summarize this file"
 alisha -f app.py -f logs.txt "what is likely failing?"
 echo "some logs" | alisha --stdin "diagnose this"
@@ -27,7 +30,8 @@ Run the project-local script directly before installing the global command:
 
 ## Configuration
 
-Runtime defaults live in `config.json` beside the script.
+Shared runtime defaults live in `config.json` beside the script. Quick modes
+live in `lo.json`, `med.json`, and `hi.json`.
 
 Important fields:
 
@@ -36,14 +40,23 @@ Important fields:
 - `model`: Portkey model route used by default.
 - `max_completion_tokens`: output token cap for Chat Completions.
 - `reasoning_effort`: reasoning level for compatible models, such as `high`.
+- `verbosity`: output detail level for compatible models.
 - `stream`: whether to stream Chat Completions output.
 - `file_context_max_bytes`: per-file context read limit.
 - `system_prompt`: assistant behavior instructions.
 
+Mode defaults:
+
+- `--lo`: fastest and cheapest; nano model, no reasoning, low verbosity, 1000 tokens.
+- `--med`: balanced; mini model, medium reasoning, medium verbosity, 2800 tokens.
+- `--hi`: highest quality; GPT-5.5 route, xhigh reasoning, high verbosity, 8000 tokens.
+
+Plain `alisha ...` uses `--lo`.
+
 CLI flags override config values for a single run:
 
 ```sh
-alisha --model @personal-openai/gpt-5-mini --m 400 "answer briefly"
+alisha --model @personal-openai/gpt-5.4-mini --m 400 "answer briefly"
 alisha --reasoning-effort high --m 5000 "solve carefully"
 alisha --config ./other-config.json "use alternate defaults"
 ```

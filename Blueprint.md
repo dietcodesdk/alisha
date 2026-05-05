@@ -11,7 +11,7 @@ terminal
 /usr/local/bin/alisha -> /home/van/tools/alisha/alisha
   |
   v
-config.json + prompt/stdin/text files
+config.json + mode config + prompt/stdin/text files
   |
   v
 Portkey OpenAI-compatible Chat Completions API
@@ -24,21 +24,25 @@ streamed stdout
 
 - `alisha`: executable Python script containing CLI parsing, config loading,
   file/stdin context assembly, and Portkey request handling.
-- `config.json`: default model, max completion token limit, reasoning effort,
-  streaming behavior, file context limit, Portkey base URL, API key environment
-  variable, and system prompt.
+- `config.json`: shared Portkey base URL, API key environment variable,
+  streaming behavior, file context limit, and system prompt.
+- `lo.json`, `med.json`, `hi.json`: quick mode defaults for model, reasoning
+  effort, verbosity, and completion token budget.
 - `venv`: local Python virtualenv used by the script shebang.
 
 ## Data Flow
 
-1. Parse CLI arguments and load `config.json`.
-2. Apply CLI overrides for `--model` and `--m/--max-output`.
-3. Read repeatable `-f/--file` text context with a per-file byte limit.
-4. Optionally read stdin.
-5. Build one labeled user content payload containing the question, file
+1. Parse CLI arguments and choose `lo`, `med`, or `hi`; default to `lo`.
+2. Load built-in defaults, `config.json`, the selected mode config, and any
+   explicit `--config` override.
+3. Apply CLI overrides for `--model`, `--reasoning-effort`, and
+   `--m/--max-output`.
+4. Read repeatable `-f/--file` text context with a per-file byte limit.
+5. Optionally read stdin.
+6. Build one labeled user content payload containing the question, file
    context, and stdin context.
-6. Send system and user messages to `client.chat.completions.create`.
-7. Stream `choices[].delta.content` chunks to stdout.
+7. Send system and user messages to `client.chat.completions.create`.
+8. Stream `choices[].delta.content` chunks to stdout.
 
 ## Invariants And Constraints
 
@@ -47,6 +51,7 @@ streamed stdout
   `PORTKEY_API_KEY` by default.
 - Missing files, directories, invalid config, and absent prompt/stdin are
   expected CLI errors and exit with code `2`.
+- Plain `alisha ...` uses `lo` mode unless `--med` or `--hi` is specified.
 - The global command should point at the project-local script rather than
   duplicating script contents into `/usr/local/bin`.
 

@@ -31,3 +31,14 @@
   use `max_completion_tokens` for `--m/--max-output`.
 - Added `--reasoning-effort` for per-request overrides while keeping high
   reasoning as the default config.
+- Portkey rejected `reasoning_effort: "minimal"` for the current model route;
+  local validation allows only `none`, `low`, `medium`, `high`, and `xhigh`.
+
+## 2026-05-05 Quick Modes
+
+- Planned mode defaults:
+  - `lo`: `@personal-openai/gpt-5.4-nano`, no reasoning, low verbosity.
+  - `med`: `@personal-openai/gpt-5.4-mini`, medium reasoning, medium verbosity.
+  - `hi`: `@personal-openai/gpt-5.5`, xhigh reasoning, high verbosity.
+- The `gpt-5.5` route is inferred from the user's Portkey naming pattern; if
+  Portkey rejects it, adjust `hi.json`.
