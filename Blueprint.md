@@ -11,7 +11,7 @@ terminal
 /usr/local/bin/alisha -> /home/van/tools/alisha/alisha
   |
   v
-config.json + mode config + prompt/stdin/text files
+config.json + mode config + history + prompt/stdin/text files
   |
   v
 Portkey OpenAI-compatible Chat Completions API
@@ -28,6 +28,8 @@ streamed stdout
   streaming behavior, file context limit, and system prompt.
 - `lo.json`, `med.json`, `hi.json`: quick mode defaults for model, reasoning
   effort, verbosity, and completion token budget.
+- `.alisha_history.json`: gitignored rolling cache of the last 20 successful
+  question/answer exchanges.
 - `venv`: local Python virtualenv used by the script shebang.
 
 ## Data Flow
@@ -41,8 +43,12 @@ streamed stdout
 5. Optionally read stdin.
 6. Build one labeled user content payload containing the question, file
    context, and stdin context.
-7. Send system and user messages to `client.chat.completions.create`.
-8. Stream `choices[].delta.content` chunks to stdout.
+7. If `--history N` is non-zero, prepend the most recent N saved exchanges as
+   labeled context.
+8. Send system and user messages to `client.chat.completions.create`.
+9. Stream `choices[].delta.content` chunks to stdout while accumulating text.
+10. On success, save the current request context and answer to the rolling
+    history cache.
 
 ## Invariants And Constraints
 
@@ -52,6 +58,9 @@ streamed stdout
 - Missing files, directories, invalid config, and absent prompt/stdin are
   expected CLI errors and exit with code `2`.
 - Plain `alisha ...` uses `lo` mode unless `--med` or `--hi` is specified.
+- History is saved after successful requests, but only sent when `--history N`
+  is provided; default N is `0`.
+- Stored history keeps at most 20 entries and may include file/stdin contents.
 - The global command should point at the project-local script rather than
   duplicating script contents into `/usr/local/bin`.
 

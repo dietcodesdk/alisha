@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +57,7 @@ CONFIGURABLE_CHAT_PARAMS = (
 
 REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh")
 MODES = ("lo", "med", "hi")
+HISTORY_LIMIT = 20
 
 
 class CliError(Exception):
@@ -68,6 +70,10 @@ def default_config_path() -> Path:
 
 def mode_config_path(mode: str) -> Path:
     return Path(__file__).resolve().with_name(f"{mode}.json")
+
+
+def history_path() -> Path:
+    return Path(__file__).resolve().with_name(".alisha_history.json")
 
 
 def read_config_file(path: Path) -> dict[str, Any]:
@@ -104,6 +110,19 @@ def positive_int(value: Any, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise CliError(f"{name} must be a positive integer.")
     return value
+
+
+def history_count(value: str) -> int:
+    try:
+        count = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("--history must be an integer.") from exc
+
+    if count < 0 or count > HISTORY_LIMIT:
+        raise argparse.ArgumentTypeError(
+            f"--history must be between 0 and {HISTORY_LIMIT}."
+        )
+    return count
 
 
 def validate_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -214,6 +233,95 @@ def build_user_content(
     return "\n\n".join(sections).strip()
 
 
+def load_history(path: Path | None = None) -> list[dict[str, Any]]:
+    path = path or history_path()
+    if not path.exists():
+        return []
+
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+    if not isinstance(data, list):
+        return []
+
+    entries: list[dict[str, Any]] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        question = item.get("question")
+        answer = item.get("answer")
+        if isinstance(question, str) and isinstance(answer, str):
+            entries.append(item)
+    return entries[-HISTORY_LIMIT:]
+
+
+def format_history_context(entries: list[dict[str, Any]], count: int) -> str:
+    if count <= 0:
+        return ""
+
+    selected = entries[-count:]
+    if not selected:
+        return ""
+
+    sections = [
+        "--- previous alisha exchanges ---",
+        (
+            "These are prior Alisha question/answer pairs provided only as "
+            "additional context."
+        ),
+    ]
+
+    for index, entry in enumerate(selected, start=1):
+        question = entry["question"].strip()
+        answer = entry["answer"].strip()
+        sections.append(f"[{index}]\nQuestion:\n{question}\n\nAnswer:\n{answer}")
+
+    return "\n\n".join(sections).strip()
+
+
+def combine_history_and_current(history_context: str, current_content: str) -> str:
+    if not history_context:
+        return current_content
+    return f"{history_context}\n\n--- current request ---\n{current_content}".strip()
+
+
+def save_history_entry(
+    question: str,
+    answer: str,
+    mode: str,
+    model: str,
+    path: Path | None = None,
+) -> None:
+    answer = answer.strip()
+    if not answer:
+        return
+
+    path = path or history_path()
+    entries = load_history(path)
+    entries.append(
+        {
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "question": question,
+            "answer": answer,
+            "mode": mode,
+            "model": model,
+        }
+    )
+    entries = entries[-HISTORY_LIMIT:]
+
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        with tmp_path.open("w", encoding="utf-8") as handle:
+            json.dump(entries, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+        tmp_path.replace(path)
+    except OSError as exc:
+        raise CliError(f"Unable to write history {path}: {exc}") from exc
+
+
 def chat_params(config: dict[str, Any]) -> dict[str, Any]:
     params: dict[str, Any] = {
         "model": config["model"],
@@ -227,23 +335,26 @@ def chat_params(config: dict[str, Any]) -> dict[str, Any]:
     return params
 
 
-def print_non_streamed_response(response: Any) -> None:
+def print_non_streamed_response(response: Any) -> str:
+    parts: list[str] = []
     for choice in getattr(response, "choices", []) or []:
         message = getattr(choice, "message", None)
         content = getattr(message, "content", None)
         if content:
+            parts.append(content)
             sys.stdout.write(content)
     sys.stdout.write("\n")
     sys.stdout.flush()
+    return "".join(parts)
 
 
-def run_portkey_request(config: dict[str, Any], user_content: str) -> int:
+def run_portkey_request(config: dict[str, Any], user_content: str) -> tuple[int, str]:
     api_key_env = config["api_key_env"]
     api_key = os.getenv(api_key_env)
     if not api_key:
         print(f"ERROR: {api_key_env} is not set.", file=sys.stderr)
         print(f'Set it with: export {api_key_env}="..."', file=sys.stderr)
-        return 2
+        return 2, ""
 
     client = OpenAI(base_url=config["base_url"], api_key=api_key)
     params = chat_params(config)
@@ -253,6 +364,7 @@ def run_portkey_request(config: dict[str, Any], user_content: str) -> int:
     ]
 
     try:
+        answer_parts: list[str] = []
         if config["stream"]:
             stream = client.chat.completions.create(**params, stream=True)
             for chunk in stream:
@@ -260,27 +372,28 @@ def run_portkey_request(config: dict[str, Any], user_content: str) -> int:
                     delta = getattr(choice, "delta", None)
                     content = getattr(delta, "content", None)
                     if content:
+                        answer_parts.append(content)
                         sys.stdout.write(content)
                         sys.stdout.flush()
             sys.stdout.write("\n")
             sys.stdout.flush()
         else:
             response = client.chat.completions.create(**params)
-            print_non_streamed_response(response)
-        return 0
+            answer_parts.append(print_non_streamed_response(response))
+        return 0, "".join(answer_parts)
     except KeyboardInterrupt:
         sys.stdout.write("\n")
         sys.stdout.flush()
-        return 130
+        return 130, ""
     except APIStatusError as exc:
         print(
             f"\nERROR: API request failed with status {exc.status_code}: {exc.message}",
             file=sys.stderr,
         )
-        return 1
+        return 1, ""
     except APIError as exc:
         print(f"\nERROR: API request failed: {exc}", file=sys.stderr)
-        return 1
+        return 1, ""
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -324,6 +437,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--stdin",
         action="store_true",
         help="Force reading stdin and append it to the prompt/context.",
+    )
+    parser.add_argument(
+        "--history",
+        type=history_count,
+        default=0,
+        metavar="N",
+        help=f"Include the most recent N saved exchanges as context (0-{HISTORY_LIMIT}).",
     )
     parser.add_argument(
         "--config",
@@ -370,7 +490,18 @@ def main(argv: list[str] | None = None) -> int:
             include_stdin=include_stdin,
             file_context_max_bytes=config["file_context_max_bytes"],
         )
-        return run_portkey_request(config, user_content)
+        history_context = format_history_context(load_history(), args.history)
+        request_content = combine_history_and_current(history_context, user_content)
+
+        status, answer = run_portkey_request(config, request_content)
+        if status == 0:
+            save_history_entry(
+                question=user_content,
+                answer=answer,
+                mode=mode,
+                model=config["model"],
+            )
+        return status
     except CliError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

@@ -15,6 +15,7 @@ It streams answers to stdout and can include local text files as context.
 ```sh
 alisha "explain this error"
 alisha --lo "what is the git command to switch branches?"
+alisha --history 3 "continue from the recent Alisha context"
 alisha --med -f app.py "review this file"
 alisha --hi --m 8000 "design this carefully"
 alisha -f app.py "summarize this file"
@@ -52,6 +53,27 @@ Mode defaults:
 - `--hi`: highest quality; GPT-5.5 route, xhigh reasoning, high verbosity, 8000 tokens.
 
 Plain `alisha ...` uses `--lo`.
+
+## History Context
+
+Alisha saves the last 20 successful question/answer exchanges in
+`.alisha_history.json`. The file is local runtime state and is ignored by git.
+
+By default, saved history is not sent to the model:
+
+```sh
+alisha "answer without prior history"
+```
+
+Use `--history N` to include the most recent `N` prior exchanges as additional
+context:
+
+```sh
+alisha --history 2 "use the recent context"
+```
+
+The saved question is the full assembled request context, including file and
+stdin contents when provided.
 
 CLI flags override config values for a single run:
 

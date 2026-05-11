@@ -42,3 +42,12 @@
   - `hi`: `@personal-openai/gpt-5.5`, xhigh reasoning, high verbosity.
 - The `gpt-5.5` route is inferred from the user's Portkey naming pattern; if
   Portkey rejects it, adjust `hi.json`.
+
+## 2026-05-07 History Context
+
+- Planned history cache is project-local `.alisha_history.json` and gitignored.
+- Store full assembled current request context plus assistant answer after
+  successful API calls only.
+- Do not include prior-history injection in the saved question; otherwise the
+  cache grows recursively.
+- Keep only the latest 20 entries and default `--history` to `0`.
