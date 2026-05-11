@@ -1,7 +1,7 @@
 # Alisha
 
 Alisha is a small terminal assistant command backed by Portkey's
-OpenAI-compatible Chat Completions API.
+OpenAI-compatible Responses API.
 It streams answers to stdout and can include local text files as context.
 
 ## Requirements
@@ -18,6 +18,7 @@ alisha --lo "what is the git command to switch branches?"
 alisha --history 3 "continue from the recent Alisha context"
 alisha --med -f app.py "review this file"
 alisha --hi --m 8000 "design this carefully"
+alisha --hi "what changed in the OpenAI API this week?"
 alisha -f app.py "summarize this file"
 alisha -f app.py -f logs.txt "what is likely failing?"
 echo "some logs" | alisha --stdin "diagnose this"
@@ -39,10 +40,11 @@ Important fields:
 - `base_url`: Portkey-compatible API base URL.
 - `api_key_env`: environment variable containing the Portkey API key.
 - `model`: Portkey model route used by default.
-- `max_completion_tokens`: output token cap for Chat Completions.
+- `max_output_tokens`: output token cap for Responses.
 - `reasoning_effort`: reasoning level for compatible models, such as `high`.
 - `verbosity`: output detail level for compatible models.
-- `stream`: whether to stream Chat Completions output.
+- `tools`: Responses API tools, used by `--hi` for web search.
+- `stream`: whether to stream Responses API output.
 - `file_context_max_bytes`: per-file context read limit.
 - `system_prompt`: assistant behavior instructions.
 
@@ -50,7 +52,8 @@ Mode defaults:
 
 - `--lo`: fastest and cheapest; nano model, no reasoning, low verbosity, 1000 tokens.
 - `--med`: balanced; mini model, medium reasoning, medium verbosity, 2800 tokens.
-- `--hi`: highest quality; GPT-5.5 route, xhigh reasoning, high verbosity, 8000 tokens.
+- `--hi`: highest quality; GPT-5.5 route, xhigh reasoning, high verbosity,
+  web search enabled, 8000 tokens.
 
 Plain `alisha ...` uses `--lo`.
 
@@ -75,6 +78,22 @@ alisha --history 2 "use the recent context"
 The saved question is the full assembled request context, including file and
 stdin contents when provided.
 
+## Web Search
+
+`--hi` enables Responses API web search through `tools` in `hi.json`:
+
+```json
+"tools": [
+  {
+    "type": "web_search",
+    "search_context_size": "high"
+  }
+],
+"tool_choice": "auto"
+```
+
+`--lo` and `--med` do not enable web search.
+
 CLI flags override config values for a single run:
 
 ```sh
@@ -83,7 +102,7 @@ alisha --reasoning-effort high --m 5000 "solve carefully"
 alisha --config ./other-config.json "use alternate defaults"
 ```
 
-For high reasoning with this Portkey Chat Completions route, set:
+For high reasoning with this Portkey Responses route, set:
 
 ```json
 "reasoning_effort": "high"

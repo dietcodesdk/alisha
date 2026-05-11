@@ -20,7 +20,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "base_url": "https://portkey.bain.dev/v1",
     "api_key_env": "PORTKEY_API_KEY",
     "model": "@personal-openai/gpt-5.4-nano",
-    "max_completion_tokens": 1200,
+    "max_output_tokens": 1200,
     "temperature": None,
     "top_p": None,
     "reasoning_effort": "none",
@@ -38,21 +38,21 @@ DEFAULT_CONFIG: dict[str, Any] = {
     ),
 }
 
-CONFIGURABLE_CHAT_PARAMS = (
+CONFIGURABLE_RESPONSE_PARAMS = (
     "temperature",
     "top_p",
-    "reasoning_effort",
     "service_tier",
-    "verbosity",
     "metadata",
     "parallel_tool_calls",
     "store",
-    "stop",
-    "presence_penalty",
-    "frequency_penalty",
-    "seed",
-    "response_format",
-    "max_completion_tokens",
+    "truncation",
+    "tools",
+    "tool_choice",
+    "max_tool_calls",
+    "include",
+    "prompt_cache_key",
+    "prompt_cache_retention",
+    "safety_identifier",
 )
 
 REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh")
@@ -128,11 +128,11 @@ def history_count(value: str) -> int:
 def validate_config(config: dict[str, Any]) -> dict[str, Any]:
     config = dict(config)
 
-    if "max_completion_tokens" not in config:
-        if "max_tokens" in config:
-            config["max_completion_tokens"] = config["max_tokens"]
-        elif "max_output_tokens" in config:
-            config["max_completion_tokens"] = config["max_output_tokens"]
+    if "max_output_tokens" not in config:
+        if "max_completion_tokens" in config:
+            config["max_output_tokens"] = config["max_completion_tokens"]
+        elif "max_tokens" in config:
+            config["max_output_tokens"] = config["max_tokens"]
 
     if not isinstance(config.get("base_url"), str) or not config["base_url"].strip():
         raise CliError("base_url must be a non-empty string.")
@@ -146,8 +146,8 @@ def validate_config(config: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(config.get("model"), str) or not config["model"].strip():
         raise CliError("model must be a non-empty string.")
 
-    config["max_completion_tokens"] = positive_int(
-        config.get("max_completion_tokens"), "max_completion_tokens"
+    config["max_output_tokens"] = positive_int(
+        config.get("max_output_tokens"), "max_output_tokens"
     )
 
     max_bytes = config.get("file_context_max_bytes")
@@ -170,6 +170,25 @@ def validate_config(config: dict[str, Any]) -> dict[str, Any]:
     verbosity = config.get("verbosity")
     if verbosity is not None and verbosity not in ("low", "medium", "high"):
         raise CliError("verbosity must be one of: low, medium, high.")
+
+    tools = config.get("tools")
+    if tools is not None:
+        if not isinstance(tools, list):
+            raise CliError("tools must be an array.")
+        for tool in tools:
+            if not isinstance(tool, dict):
+                raise CliError("tools entries must be objects.")
+            if tool.get("type") in ("web_search", "web_search_2025_08_26"):
+                search_context_size = tool.get("search_context_size")
+                if search_context_size is not None and search_context_size not in (
+                    "low",
+                    "medium",
+                    "high",
+                ):
+                    raise CliError(
+                        "web_search search_context_size must be one of: "
+                        "low, medium, high."
+                    )
 
     return config
 
@@ -322,30 +341,32 @@ def save_history_entry(
         raise CliError(f"Unable to write history {path}: {exc}") from exc
 
 
-def chat_params(config: dict[str, Any]) -> dict[str, Any]:
+def response_params(config: dict[str, Any]) -> dict[str, Any]:
     params: dict[str, Any] = {
         "model": config["model"],
-        "max_completion_tokens": config["max_completion_tokens"],
+        "max_output_tokens": config["max_output_tokens"],
     }
 
-    for name in CONFIGURABLE_CHAT_PARAMS:
+    for name in CONFIGURABLE_RESPONSE_PARAMS:
         if name in config and config[name] is not None:
             params[name] = config[name]
+
+    if config.get("reasoning_effort") is not None:
+        params["reasoning"] = {"effort": config["reasoning_effort"]}
+
+    if config.get("verbosity") is not None:
+        params["text"] = {"verbosity": config["verbosity"]}
 
     return params
 
 
 def print_non_streamed_response(response: Any) -> str:
-    parts: list[str] = []
-    for choice in getattr(response, "choices", []) or []:
-        message = getattr(choice, "message", None)
-        content = getattr(message, "content", None)
-        if content:
-            parts.append(content)
-            sys.stdout.write(content)
+    output_text = getattr(response, "output_text", "")
+    if output_text:
+        sys.stdout.write(output_text)
     sys.stdout.write("\n")
     sys.stdout.flush()
-    return "".join(parts)
+    return output_text
 
 
 def run_portkey_request(config: dict[str, Any], user_content: str) -> tuple[int, str]:
@@ -357,28 +378,26 @@ def run_portkey_request(config: dict[str, Any], user_content: str) -> tuple[int,
         return 2, ""
 
     client = OpenAI(base_url=config["base_url"], api_key=api_key)
-    params = chat_params(config)
-    params["messages"] = [
-        {"role": "system", "content": config["system_prompt"]},
-        {"role": "user", "content": user_content},
-    ]
+    params = response_params(config)
+    params["instructions"] = config["system_prompt"]
+    params["input"] = user_content
 
     try:
         answer_parts: list[str] = []
         if config["stream"]:
-            stream = client.chat.completions.create(**params, stream=True)
-            for chunk in stream:
-                for choice in getattr(chunk, "choices", []) or []:
-                    delta = getattr(choice, "delta", None)
-                    content = getattr(delta, "content", None)
-                    if content:
-                        answer_parts.append(content)
-                        sys.stdout.write(content)
-                        sys.stdout.flush()
+            stream = client.responses.create(**params, stream=True)
+            for event in stream:
+                if event.type == "response.output_text.delta":
+                    answer_parts.append(event.delta)
+                    sys.stdout.write(event.delta)
+                    sys.stdout.flush()
+                elif event.type == "response.error":
+                    print(f"\n[Portkey error] {event.error}", file=sys.stderr)
+                    return 1, ""
             sys.stdout.write("\n")
             sys.stdout.flush()
         else:
-            response = client.chat.completions.create(**params)
+            response = client.responses.create(**params)
             answer_parts.append(print_non_streamed_response(response))
         return 0, "".join(answer_parts)
     except KeyboardInterrupt:
@@ -462,7 +481,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--max-output",
         dest="max_output",
         type=int,
-        help="Override configured max completion tokens.",
+        help="Override configured max output tokens.",
     )
     return parser.parse_args(argv)
 
@@ -478,7 +497,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.reasoning_effort:
             config["reasoning_effort"] = args.reasoning_effort
         if args.max_output is not None:
-            config["max_completion_tokens"] = args.max_output
+            config["max_output_tokens"] = args.max_output
         config = validate_config(config)
 
         stdin_text = read_all_stdin()

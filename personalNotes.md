@@ -51,3 +51,13 @@
 - Do not include prior-history injection in the saved question; otherwise the
   cache grows recursively.
 - Keep only the latest 20 entries and default `--history` to `0`.
+
+## 2026-05-11 Hi Mode Web Search
+
+- Portkey rejected Chat Completions `web_search_options`.
+- Migrated Alisha to Portkey Responses API and enabled `web_search` as a
+  Responses tool only in `hi.json`.
+- Current mode configs use `max_output_tokens`; older Chat Completions token
+  aliases remain supported for compatibility.
+- If Portkey rejects web search for `@personal-openai/gpt-5.5`, adjust
+  `hi.json` to a Portkey route that supports Responses API web search.

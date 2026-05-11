@@ -14,7 +14,7 @@ terminal
 config.json + mode config + history + prompt/stdin/text files
   |
   v
-Portkey OpenAI-compatible Chat Completions API
+Portkey OpenAI-compatible Responses API
   |
   v
 streamed stdout
@@ -23,11 +23,11 @@ streamed stdout
 ## Key Modules
 
 - `alisha`: executable Python script containing CLI parsing, config loading,
-  file/stdin context assembly, and Portkey request handling.
+  file/stdin context assembly, and Portkey Responses request handling.
 - `config.json`: shared Portkey base URL, API key environment variable,
   streaming behavior, file context limit, and system prompt.
 - `lo.json`, `med.json`, `hi.json`: quick mode defaults for model, reasoning
-  effort, verbosity, and completion token budget.
+  effort, verbosity, completion token budget, and optional web search.
 - `.alisha_history.json`: gitignored rolling cache of the last 20 successful
   question/answer exchanges.
 - `venv`: local Python virtualenv used by the script shebang.
@@ -45,8 +45,8 @@ streamed stdout
    context, and stdin context.
 7. If `--history N` is non-zero, prepend the most recent N saved exchanges as
    labeled context.
-8. Send system and user messages to `client.chat.completions.create`.
-9. Stream `choices[].delta.content` chunks to stdout while accumulating text.
+8. Send instructions and input to `client.responses.create`.
+9. Stream `response.output_text.delta` events to stdout while accumulating text.
 10. On success, save the current request context and answer to the rolling
     history cache.
 
@@ -58,6 +58,8 @@ streamed stdout
 - Missing files, directories, invalid config, and absent prompt/stdin are
   expected CLI errors and exit with code `2`.
 - Plain `alisha ...` uses `lo` mode unless `--med` or `--hi` is specified.
+- `hi` mode enables Responses API web search via `tools`;
+  `lo` and `med` do not.
 - History is saved after successful requests, but only sent when `--history N`
   is provided; default N is `0`.
 - Stored history keeps at most 20 entries and may include file/stdin contents.
@@ -67,5 +69,5 @@ streamed stdout
 ## External Dependencies
 
 - OpenAI Python SDK in `./venv`.
-- Portkey OpenAI-compatible Chat Completions endpoint.
+- Portkey OpenAI-compatible Responses endpoint.
 - Shell PATH containing `/usr/local/bin`.
