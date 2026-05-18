@@ -61,3 +61,10 @@
   aliases remain supported for compatibility.
 - If Portkey rejects web search for `@personal-openai/gpt-5.5`, adjust
   `hi.json` to a Portkey route that supports Responses API web search.
+
+## 2026-05-18 Self Help Flag
+
+- Added planned `-s/--self` behavior to inject project-root `README.md` as
+  context for questions about using Alisha.
+- Keep injected README content out of `.alisha_history.json` to avoid repeated
+  history bloat; save a `self_help` boolean on history entries instead.

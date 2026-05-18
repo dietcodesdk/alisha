@@ -76,6 +76,10 @@ def history_path() -> Path:
     return Path(__file__).resolve().with_name(".alisha_history.json")
 
 
+def self_help_path() -> Path:
+    return Path(__file__).resolve().with_name("README.md")
+
+
 def read_config_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -199,7 +203,7 @@ def read_all_stdin() -> str:
     return sys.stdin.read()
 
 
-def read_text_file(path_text: str, max_bytes: int | None) -> tuple[str, bool]:
+def read_text_file(path_text: str | Path, max_bytes: int | None) -> tuple[str, bool]:
     path = Path(path_text).expanduser()
 
     if not path.exists():
@@ -225,10 +229,18 @@ def build_user_content(
     file_paths: list[str],
     stdin_text: str,
     include_stdin: bool,
+    include_self_help: bool,
     file_context_max_bytes: int | None,
 ) -> str:
     question = " ".join(prompt_parts).strip()
     sections: list[str] = []
+
+    if include_self_help:
+        content, truncated = read_text_file(self_help_path(), file_context_max_bytes)
+        marker = " truncated" if truncated else ""
+        sections.append(
+            f"--- alisha self help: README.md{marker} ---\n{content.rstrip()}"
+        )
 
     if question:
         sections.append(f"--- question ---\n{question}")
@@ -312,6 +324,7 @@ def save_history_entry(
     answer: str,
     mode: str,
     model: str,
+    self_help: bool,
     path: Path | None = None,
 ) -> None:
     answer = answer.strip()
@@ -327,6 +340,7 @@ def save_history_entry(
             "answer": answer,
             "mode": mode,
             "model": model,
+            "self_help": self_help,
         }
     )
     entries = entries[-HISTORY_LIMIT:]
@@ -458,6 +472,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Force reading stdin and append it to the prompt/context.",
     )
     parser.add_argument(
+        "-s",
+        "--self",
+        dest="self_help",
+        action="store_true",
+        help="Include Alisha's README.md as self-help context.",
+    )
+    parser.add_argument(
         "--history",
         type=history_count,
         default=0,
@@ -507,10 +528,21 @@ def main(argv: list[str] | None = None) -> int:
             file_paths=args.files,
             stdin_text=stdin_text,
             include_stdin=include_stdin,
+            include_self_help=False,
+            file_context_max_bytes=config["file_context_max_bytes"],
+        )
+        request_user_content = build_user_content(
+            prompt_parts=args.prompt,
+            file_paths=args.files,
+            stdin_text=stdin_text,
+            include_stdin=include_stdin,
+            include_self_help=args.self_help,
             file_context_max_bytes=config["file_context_max_bytes"],
         )
         history_context = format_history_context(load_history(), args.history)
-        request_content = combine_history_and_current(history_context, user_content)
+        request_content = combine_history_and_current(
+            history_context, request_user_content
+        )
 
         status, answer = run_portkey_request(config, request_content)
         if status == 0:
@@ -519,6 +551,7 @@ def main(argv: list[str] | None = None) -> int:
                 answer=answer,
                 mode=mode,
                 model=config["model"],
+                self_help=args.self_help,
             )
         return status
     except CliError as exc:

@@ -15,6 +15,7 @@ It streams answers to stdout and can include local text files as context.
 ```sh
 alisha "explain this error"
 alisha --lo "what is the git command to switch branches?"
+alisha -s "how do I send you input from another command?"
 alisha --history 3 "continue from the recent Alisha context"
 alisha --med -f app.py "review this file"
 alisha --hi --m 8000 "design this carefully"
@@ -22,6 +23,7 @@ alisha --hi "what changed in the OpenAI API this week?"
 alisha -f app.py "summarize this file"
 alisha -f app.py -f logs.txt "what is likely failing?"
 echo "some logs" | alisha --stdin "diagnose this"
+some-command | alisha -s --stdin "summarize this"
 ```
 
 Run the project-local script directly before installing the global command:
@@ -56,6 +58,19 @@ Mode defaults:
   web search enabled, 8000 tokens.
 
 Plain `alisha ...` uses `--lo`.
+
+## Self Help
+
+Use `-s` or `--self` when asking Alisha how to use Alisha. It includes this
+project's `README.md` as context for the request:
+
+```sh
+alisha -s "how do I send you input from another command?"
+some-command | alisha -s --stdin "how does stdin work?"
+```
+
+The README context is sent only for that request. It is not copied into saved
+history entries.
 
 ## History Context
 

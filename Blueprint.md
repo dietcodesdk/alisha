@@ -30,6 +30,7 @@ streamed stdout
   effort, verbosity, completion token budget, and optional web search.
 - `.alisha_history.json`: gitignored rolling cache of the last 20 successful
   question/answer exchanges.
+- `README.md`: user guide and optional `-s/--self` context source.
 - `venv`: local Python virtualenv used by the script shebang.
 
 ## Data Flow
@@ -41,13 +42,14 @@ streamed stdout
    `--m/--max-output`.
 4. Read repeatable `-f/--file` text context with a per-file byte limit.
 5. Optionally read stdin.
-6. Build one labeled user content payload containing the question, file
-   context, and stdin context.
-7. If `--history N` is non-zero, prepend the most recent N saved exchanges as
+6. Build one labeled user content payload containing optional self-help README
+   context, the question, file context, and stdin context.
+7. Build a separate history-safe question payload without the self-help README.
+8. If `--history N` is non-zero, prepend the most recent N saved exchanges as
    labeled context.
-8. Send instructions and input to `client.responses.create`.
-9. Stream `response.output_text.delta` events to stdout while accumulating text.
-10. On success, save the current request context and answer to the rolling
+9. Send instructions and input to `client.responses.create`.
+10. Stream `response.output_text.delta` events to stdout while accumulating text.
+11. On success, save the current request context and answer to the rolling
     history cache.
 
 ## Invariants And Constraints
@@ -63,6 +65,8 @@ streamed stdout
 - History is saved after successful requests, but only sent when `--history N`
   is provided; default N is `0`.
 - Stored history keeps at most 20 entries and may include file/stdin contents.
+- `-s/--self` injects this project README for the request, but the README text
+  is not persisted into history.
 - The global command should point at the project-local script rather than
   duplicating script contents into `/usr/local/bin`.
 
