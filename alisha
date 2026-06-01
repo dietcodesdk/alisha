@@ -55,7 +55,7 @@ CONFIGURABLE_RESPONSE_PARAMS = (
     "safety_identifier",
 )
 
-REASONING_EFFORTS = ("none", "low", "medium", "high", "xhigh")
+REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
 MODES = ("lo", "med", "hi")
 HISTORY_LIMIT = 20
 
