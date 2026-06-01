@@ -15,9 +15,10 @@
 
 - Consider adding tests if this grows beyond a single script.
 - Consider rich file handling later, but v1 intentionally supports only text.
-- 2026-06-01 color output decision: keep live raw streaming visible for speed,
-  then print a Rich-rendered formatted copy after the full answer is available.
-  History should continue storing only the raw assistant answer.
+- 2026-06-01 color output decision: show in-progress answers as a transient
+  bounded plain-text preview, then clear that preview and leave only the
+  formatted answer on success. History should continue storing only the raw
+  assistant answer.
 
 ## 2026-05-05 Portkey Refactor
 

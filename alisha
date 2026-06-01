@@ -9,16 +9,19 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
+import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from openai import APIError, APIStatusError, OpenAI
 from rich.console import Console
+from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.rule import Rule
+from rich.text import Text
 from rich.theme import Theme
 
 
@@ -82,7 +85,6 @@ FORMAT_THEME = Theme(
         "markdown.block_quote": "bright_yellow",
         "markdown.link": "underline bright_blue",
         "markdown.hr": "bright_black",
-        "alisha.divider": "bold bright_blue",
         "alisha.panel": "bright_yellow",
         "alisha.panel.note": "bright_cyan",
         "alisha.panel.warning": "bold yellow",
@@ -417,6 +419,98 @@ def formatted_console() -> Console:
     )
 
 
+def should_use_live_stream(stdout: Any = sys.stdout) -> bool:
+    isatty = getattr(stdout, "isatty", None)
+    return bool(isatty and isatty())
+
+
+def default_live_preview_lines() -> int:
+    terminal_height = shutil.get_terminal_size(fallback=(80, 24)).lines
+    return min(12, max(4, terminal_height // 3))
+
+
+def wrapped_preview_lines(answer: str, width: int, max_lines: int) -> list[str]:
+    if max_lines <= 0:
+        return []
+
+    width = max(1, width)
+    visual_lines: list[str] = []
+    for line in answer.expandtabs(4).splitlines() or [""]:
+        if not line:
+            visual_lines.append("")
+            continue
+        visual_lines.extend(
+            textwrap.wrap(
+                line,
+                width=width,
+                break_long_words=True,
+                break_on_hyphens=False,
+                drop_whitespace=False,
+                replace_whitespace=False,
+            )
+            or [""]
+        )
+
+    return visual_lines[-max_lines:]
+
+
+def live_preview_text(answer: str, width: int, max_lines: int) -> Text:
+    preview = "\n".join(wrapped_preview_lines(answer or " ", width, max_lines))
+    return Text(preview or " ", overflow="crop")
+
+
+def blank_live_preview(max_lines: int) -> Text:
+    return Text("\n".join("" for _ in range(max(1, max_lines))), overflow="crop")
+
+
+class StreamingAnswerDisplay:
+    def __init__(
+        self,
+        enabled: bool,
+        console: Console | None = None,
+        max_lines: int | None = None,
+    ) -> None:
+        self.enabled = enabled
+        self.console = console or formatted_console()
+        self.answer = ""
+        self.live: Live | None = None
+        self.max_lines = max_lines or default_live_preview_lines()
+
+    def start(self) -> None:
+        if not self.enabled:
+            return
+        self.live = Live(
+            live_preview_text(self.answer, self.console.width, self.max_lines),
+            console=self.console,
+            transient=True,
+            auto_refresh=False,
+            vertical_overflow="crop",
+        )
+        self.live.start(refresh=True)
+
+    def append(self, delta: str) -> None:
+        self.answer += delta
+        if self.live is not None:
+            self.live.update(
+                live_preview_text(self.answer, self.console.width, self.max_lines),
+                refresh=True,
+            )
+
+    def finish_success(self) -> None:
+        if self.live is not None:
+            self.live.update(blank_live_preview(self.max_lines), refresh=True)
+            self.live.stop()
+            self.live = None
+        sys.stdout.flush()
+
+    def finish_failure(self) -> None:
+        if self.live is not None:
+            self.live.update(blank_live_preview(self.max_lines), refresh=True)
+            self.live.stop()
+            self.live = None
+        sys.stdout.flush()
+
+
 def is_fence_line(line: str) -> bool:
     stripped = line.lstrip()
     return stripped.startswith("```") or stripped.startswith("~~~")
@@ -489,8 +583,7 @@ def print_formatted_answer(answer: str) -> None:
         return
 
     console = formatted_console()
-    console.print()
-    console.print(Rule("formatted answer", style="alisha.divider"))
+    console.print("\n")
     for kind, content in split_markdown_and_panels(answer):
         if kind == "panel":
             console.print(panel_from_blockquote(content))
@@ -500,12 +593,18 @@ def print_formatted_answer(answer: str) -> None:
 
 
 def print_non_streamed_response(response: Any) -> str:
-    output_text = getattr(response, "output_text", "")
-    if output_text:
-        sys.stdout.write(output_text)
-    sys.stdout.write("\n")
+    return getattr(response, "output_text", "")
+
+
+def print_partial_raw_answer(answer: str) -> None:
+    if not answer.strip():
+        return
+
+    sys.stdout.write("\n--- partial raw answer ---\n")
+    sys.stdout.write(answer)
+    if not answer.endswith("\n"):
+        sys.stdout.write("\n")
     sys.stdout.flush()
-    return output_text
 
 
 def run_portkey_request(config: dict[str, Any], user_content: str) -> tuple[int, str]:
@@ -521,20 +620,23 @@ def run_portkey_request(config: dict[str, Any], user_content: str) -> tuple[int,
     params["instructions"] = config["system_prompt"]
     params["input"] = user_content
 
+    answer_parts: list[str] = []
+    stream_display: StreamingAnswerDisplay | None = None
     try:
-        answer_parts: list[str] = []
         if config["stream"]:
+            stream_display = StreamingAnswerDisplay(should_use_live_stream(sys.stdout))
+            stream_display.start()
             stream = client.responses.create(**params, stream=True)
             for event in stream:
                 if event.type == "response.output_text.delta":
                     answer_parts.append(event.delta)
-                    sys.stdout.write(event.delta)
-                    sys.stdout.flush()
+                    stream_display.append(event.delta)
                 elif event.type == "response.error":
+                    stream_display.finish_failure()
+                    print_partial_raw_answer("".join(answer_parts))
                     print(f"\n[Portkey error] {event.error}", file=sys.stderr)
                     return 1, ""
-            sys.stdout.write("\n")
-            sys.stdout.flush()
+            stream_display.finish_success()
         else:
             response = client.responses.create(**params)
             answer_parts.append(print_non_streamed_response(response))
@@ -542,16 +644,23 @@ def run_portkey_request(config: dict[str, Any], user_content: str) -> tuple[int,
         print_formatted_answer(answer)
         return 0, answer
     except KeyboardInterrupt:
-        sys.stdout.write("\n")
-        sys.stdout.flush()
+        if stream_display is not None:
+            stream_display.finish_failure()
+        print_partial_raw_answer("".join(answer_parts))
         return 130, ""
     except APIStatusError as exc:
+        if stream_display is not None:
+            stream_display.finish_failure()
+        print_partial_raw_answer("".join(answer_parts))
         print(
             f"\nERROR: API request failed with status {exc.status_code}: {exc.message}",
             file=sys.stderr,
         )
         return 1, ""
     except APIError as exc:
+        if stream_display is not None:
+            stream_display.finish_failure()
+        print_partial_raw_answer("".join(answer_parts))
         print(f"\nERROR: API request failed: {exc}", file=sys.stderr)
         return 1, ""
 

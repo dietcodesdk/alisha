@@ -3,8 +3,9 @@
 Alisha is a small terminal assistant command backed by Portkey's
 OpenAI-compatible Responses API.
 It streams answers to stdout and can include local text files as context.
-After each successful answer, it prints a second colorized Markdown rendering
-of the same answer for easier reading in the terminal.
+In an interactive terminal, the in-progress answer appears as temporary plain
+text. After completion, Alisha clears that preview and leaves only the
+colorized Markdown answer.
 
 ## Requirements
 
@@ -70,9 +71,11 @@ Plain `alisha ...` uses `--lo`.
 
 ## Terminal Formatting
 
-Alisha keeps the live raw stream so answers start appearing immediately. When
-the response completes, it prints a `formatted answer` divider and renders the
-same Markdown again with terminal color.
+Alisha shows streamed answers as temporary plain text while the model is still
+responding. The preview is capped to a small number of terminal rows so long
+answers do not leave stale terminal content behind. When the response completes
+successfully, the temporary raw stream is cleared and only the final formatted
+Markdown answer remains.
 
 Rich formatting makes common answer structure easier to scan:
 
@@ -90,8 +93,9 @@ Admonition-style blockquotes get labeled boxes:
 ```
 
 Formatted output is always colorized, including when stdout is redirected or
-piped. Saved history remains the raw assistant answer and does not include ANSI
-codes or the duplicate formatted copy.
+piped. Redirected and piped runs do not stream partial raw output; they emit
+only the final formatted answer. Saved history remains the raw assistant answer
+and does not include ANSI codes or terminal-control output.
 
 ## Self Help
 
