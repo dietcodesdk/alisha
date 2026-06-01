@@ -1,9 +1,9 @@
 {
-  "model": "@personal-openai/gpt-5.5",
+  "model": "@personal-openai/gpt-5.4",
   "max_output_tokens": 8000,
   "temperature": null,
   "top_p": null,
-  "reasoning_effort": "xhigh",
+  "reasoning_effort": "high",
   "verbosity": "high",
   "tools": [
     {
