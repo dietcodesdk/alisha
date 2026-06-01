@@ -8,12 +8,18 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from openai import APIError, APIStatusError, OpenAI
+from rich.console import Console
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.rule import Rule
+from rich.theme import Theme
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -58,6 +64,33 @@ CONFIGURABLE_RESPONSE_PARAMS = (
 REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
 MODES = ("lo", "med", "hi")
 HISTORY_LIMIT = 20
+BLOCKQUOTE_RE = re.compile(r"^\s*>\s?(.*)$")
+ADMONITION_RE = re.compile(r"^\s*(note|warning|tip|important|caution)\s*:\s*", re.I)
+
+FORMAT_THEME = Theme(
+    {
+        "markdown.h1": "bold bright_cyan",
+        "markdown.h2": "bold cyan",
+        "markdown.h3": "bold green",
+        "markdown.h4": "bold green",
+        "markdown.strong": "bold bright_white",
+        "markdown.em": "italic bright_yellow",
+        "markdown.code": "bold bright_magenta",
+        "markdown.code_block": "bright_white on grey15",
+        "markdown.item.bullet": "bright_cyan",
+        "markdown.item.number": "bright_cyan",
+        "markdown.block_quote": "bright_yellow",
+        "markdown.link": "underline bright_blue",
+        "markdown.hr": "bright_black",
+        "alisha.divider": "bold bright_blue",
+        "alisha.panel": "bright_yellow",
+        "alisha.panel.note": "bright_cyan",
+        "alisha.panel.warning": "bold yellow",
+        "alisha.panel.tip": "bright_green",
+        "alisha.panel.important": "bold magenta",
+        "alisha.panel.caution": "bold red",
+    }
+)
 
 
 class CliError(Exception):
@@ -374,6 +407,98 @@ def response_params(config: dict[str, Any]) -> dict[str, Any]:
     return params
 
 
+def formatted_console() -> Console:
+    return Console(
+        file=sys.stdout,
+        force_terminal=True,
+        color_system="auto",
+        theme=FORMAT_THEME,
+        highlight=True,
+    )
+
+
+def is_fence_line(line: str) -> bool:
+    stripped = line.lstrip()
+    return stripped.startswith("```") or stripped.startswith("~~~")
+
+
+def split_markdown_and_panels(answer: str) -> list[tuple[str, str]]:
+    segments: list[tuple[str, str]] = []
+    markdown_lines: list[str] = []
+    quote_lines: list[str] = []
+    in_fence = False
+
+    def flush_markdown() -> None:
+        if not markdown_lines:
+            return
+        markdown = "\n".join(markdown_lines).strip()
+        markdown_lines.clear()
+        if markdown.strip():
+            segments.append(("markdown", markdown))
+
+    def flush_quote() -> None:
+        if not quote_lines:
+            return
+        quote = "\n".join(quote_lines).strip()
+        quote_lines.clear()
+        if quote:
+            segments.append(("panel", quote))
+
+    for line in answer.splitlines():
+        if is_fence_line(line):
+            flush_quote()
+            in_fence = not in_fence
+            markdown_lines.append(line)
+            continue
+
+        quote_match = None if in_fence else BLOCKQUOTE_RE.match(line)
+        if quote_match:
+            flush_markdown()
+            quote_lines.append(quote_match.group(1))
+            continue
+
+        flush_quote()
+        markdown_lines.append(line)
+
+    flush_quote()
+    flush_markdown()
+    return segments
+
+
+def panel_from_blockquote(content: str) -> Panel:
+    title = "Quote"
+    border_style = "alisha.panel"
+
+    admonition_match = ADMONITION_RE.match(content)
+    if admonition_match:
+        kind = admonition_match.group(1).lower()
+        title = kind.title()
+        border_style = f"alisha.panel.{kind}"
+        content = content[admonition_match.end() :].lstrip()
+
+    return Panel(
+        Markdown(content or " ", code_theme="monokai"),
+        title=f" {title} ",
+        border_style=border_style,
+        padding=(0, 1),
+    )
+
+
+def print_formatted_answer(answer: str) -> None:
+    if not answer.strip():
+        return
+
+    console = formatted_console()
+    console.print()
+    console.print(Rule("formatted answer", style="alisha.divider"))
+    for kind, content in split_markdown_and_panels(answer):
+        if kind == "panel":
+            console.print(panel_from_blockquote(content))
+        else:
+            console.print(Markdown(content, code_theme="monokai"))
+    console.print()
+
+
 def print_non_streamed_response(response: Any) -> str:
     output_text = getattr(response, "output_text", "")
     if output_text:
@@ -413,7 +538,9 @@ def run_portkey_request(config: dict[str, Any], user_content: str) -> tuple[int,
         else:
             response = client.responses.create(**params)
             answer_parts.append(print_non_streamed_response(response))
-        return 0, "".join(answer_parts)
+        answer = "".join(answer_parts)
+        print_formatted_answer(answer)
+        return 0, answer
     except KeyboardInterrupt:
         sys.stdout.write("\n")
         sys.stdout.flush()

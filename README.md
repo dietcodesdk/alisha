@@ -3,12 +3,21 @@
 Alisha is a small terminal assistant command backed by Portkey's
 OpenAI-compatible Responses API.
 It streams answers to stdout and can include local text files as context.
+After each successful answer, it prints a second colorized Markdown rendering
+of the same answer for easier reading in the terminal.
 
 ## Requirements
 
 - Python virtualenv at `./venv`
-- `openai` Python package installed in that virtualenv
+- Python packages from `requirements.txt` installed in that virtualenv,
+  including `openai` and `rich`
 - `PORTKEY_API_KEY` exported in the shell
+
+Install or refresh dependencies with:
+
+```sh
+./venv/bin/python -m pip install -r requirements.txt
+```
 
 ## Usage
 
@@ -58,6 +67,31 @@ Mode defaults:
   web search enabled, 8000 tokens.
 
 Plain `alisha ...` uses `--lo`.
+
+## Terminal Formatting
+
+Alisha keeps the live raw stream so answers start appearing immediately. When
+the response completes, it prints a `formatted answer` divider and renders the
+same Markdown again with terminal color.
+
+Rich formatting makes common answer structure easier to scan:
+
+- headings are bright and bold;
+- inline code and fenced code blocks are highlighted;
+- lists, links, emphasis, tables, and rules receive distinct styling;
+- Markdown blockquotes render as boxed panels.
+
+Admonition-style blockquotes get labeled boxes:
+
+```md
+> Note: This is useful context.
+> Warning: This step is destructive.
+> Tip: This is the fastest safe command.
+```
+
+Formatted output is always colorized, including when stdout is redirected or
+piped. Saved history remains the raw assistant answer and does not include ANSI
+codes or the duplicate formatted copy.
 
 ## Self Help
 

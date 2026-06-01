@@ -17,13 +17,14 @@ config.json + mode config + history + prompt/stdin/text files
 Portkey OpenAI-compatible Responses API
   |
   v
-streamed stdout
+raw streamed stdout + formatted Rich Markdown stdout
 ```
 
 ## Key Modules
 
 - `alisha`: executable Python script containing CLI parsing, config loading,
-  file/stdin context assembly, and Portkey Responses request handling.
+  file/stdin context assembly, Portkey Responses request handling, and Rich
+  Markdown terminal rendering.
 - `config.json`: shared Portkey base URL, API key environment variable,
   streaming behavior, file context limit, and system prompt.
 - `lo.json`, `med.json`, `hi.json`: quick mode defaults for model, reasoning
@@ -31,6 +32,8 @@ streamed stdout
 - `.alisha_history.json`: gitignored rolling cache of the last 20 successful
   question/answer exchanges.
 - `README.md`: user guide and optional `-s/--self` context source.
+- `requirements.txt`: pinned Python runtime dependencies for the local
+  virtualenv.
 - `venv`: local Python virtualenv used by the script shebang.
 
 ## Data Flow
@@ -48,8 +51,12 @@ streamed stdout
 8. If `--history N` is non-zero, prepend the most recent N saved exchanges as
    labeled context.
 9. Send instructions and input to `client.responses.create`.
-10. Stream `response.output_text.delta` events to stdout while accumulating text.
-11. On success, save the current request context and answer to the rolling
+10. Stream `response.output_text.delta` events to stdout while accumulating
+    raw answer text.
+11. After a successful response, print a divider and render the accumulated
+    answer as colorized Rich Markdown. Blockquotes and admonition-style
+    blockquotes render as terminal panels.
+12. On success, save the current request context and raw answer to the rolling
     history cache.
 
 ## Invariants And Constraints
@@ -65,6 +72,10 @@ streamed stdout
 - History is saved after successful requests, but only sent when `--history N`
   is provided; default N is `0`.
 - Stored history keeps at most 20 entries and may include file/stdin contents.
+- Formatted terminal output is presentation-only; history stores the raw
+  assistant answer without ANSI codes or the duplicate formatted render.
+- Formatted output is forced on for stdout, including redirected or piped
+  output.
 - `-s/--self` injects this project README for the request, but the README text
   is not persisted into history.
 - The global command should point at the project-local script rather than
@@ -73,5 +84,6 @@ streamed stdout
 ## External Dependencies
 
 - OpenAI Python SDK in `./venv`.
+- Rich in `./venv` for Markdown, ANSI color, syntax highlighting, and panels.
 - Portkey OpenAI-compatible Responses endpoint.
 - Shell PATH containing `/usr/local/bin`.
