@@ -1,5 +1,6 @@
 __pyc*
 venv/
 .venv/
+alisha.local.json
 .alisha_history.json
 .alisha_history.json.tmp

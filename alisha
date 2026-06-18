@@ -1,4 +1,4 @@
-#!/home/van/tools/alisha/venv/bin/python3
+#!/usr/bin/env python3
 """
 alisha: streaming terminal assistant backed by Portkey's OpenAI-compatible API.
 """
@@ -12,8 +12,6 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-from openai import APIError, APIStatusError, OpenAI
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -58,44 +56,120 @@ CONFIGURABLE_RESPONSE_PARAMS = (
 REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
 MODES = ("lo", "med", "hi")
 HISTORY_LIMIT = 20
+LOCAL_RUNTIME_CONFIG = "alisha.local.json"
+INTERPRETER_REEXEC_ENV = "ALISHA_INTERPRETER_REEXEC"
 
 
 class CliError(Exception):
     """Expected command-line/configuration error."""
 
 
+def project_file_path(name: str) -> Path:
+    return Path(__file__).resolve().with_name(name)
+
+
+def project_dir() -> Path:
+    return Path(__file__).resolve().parent
+
+
 def default_config_path() -> Path:
-    return Path(__file__).resolve().with_name("config.json")
+    return project_file_path("config.json")
 
 
 def mode_config_path(mode: str) -> Path:
-    return Path(__file__).resolve().with_name(f"{mode}.json")
+    return project_file_path(f"{mode}.json")
 
 
 def history_path() -> Path:
-    return Path(__file__).resolve().with_name(".alisha_history.json")
+    return project_file_path(".alisha_history.json")
 
 
 def self_help_path() -> Path:
-    return Path(__file__).resolve().with_name("README.md")
+    return project_file_path("README.md")
 
 
-def read_config_file(path: Path) -> dict[str, Any]:
+def local_runtime_config_path() -> Path:
+    return project_file_path(LOCAL_RUNTIME_CONFIG)
+
+
+def read_json_object_file(path: Path, label: str) -> dict[str, Any]:
     if not path.exists():
         return {}
 
     try:
         with path.open("r", encoding="utf-8") as handle:
-            user_config = json.load(handle)
+            data = json.load(handle)
     except json.JSONDecodeError as exc:
-        raise CliError(f"Invalid JSON in config {path}: {exc}") from exc
+        raise CliError(f"Invalid JSON in {label} {path}: {exc}") from exc
     except OSError as exc:
-        raise CliError(f"Unable to read config {path}: {exc}") from exc
+        raise CliError(f"Unable to read {label} {path}: {exc}") from exc
 
-    if not isinstance(user_config, dict):
-        raise CliError(f"Config {path} must contain a JSON object.")
+    if not isinstance(data, dict):
+        raise CliError(f"{label.title()} {path} must contain a JSON object.")
 
-    return user_config
+    return data
+
+
+def read_config_file(path: Path) -> dict[str, Any]:
+    return read_json_object_file(path, "config")
+
+
+def read_local_runtime_config() -> dict[str, Any]:
+    config = read_json_object_file(local_runtime_config_path(), "local runtime config")
+
+    for name in ("python_interpreter", "system_info", "additional_info"):
+        value = config.get(name)
+        if value is not None and not isinstance(value, str):
+            raise CliError(f"{name} in {LOCAL_RUNTIME_CONFIG} must be a string.")
+
+    return config
+
+
+def resolve_local_path(path_text: str) -> Path:
+    path = Path(path_text).expanduser()
+    if not path.is_absolute():
+        path = project_dir() / path
+    return Path(os.path.abspath(path))
+
+
+def ensure_configured_interpreter(argv: list[str]) -> dict[str, Any]:
+    runtime_config = read_local_runtime_config()
+    interpreter_text = runtime_config.get("python_interpreter")
+    if not isinstance(interpreter_text, str) or not interpreter_text.strip():
+        return runtime_config
+
+    interpreter_path = resolve_local_path(interpreter_text.strip())
+    if not interpreter_path.exists():
+        raise CliError(f"python_interpreter not found: {interpreter_path}")
+    if not interpreter_path.is_file():
+        raise CliError(f"python_interpreter is not a file: {interpreter_path}")
+    if not os.access(interpreter_path, os.X_OK):
+        raise CliError(f"python_interpreter is not executable: {interpreter_path}")
+
+    current_interpreter = Path(os.path.abspath(sys.executable))
+    if current_interpreter == interpreter_path:
+        os.environ.pop(INTERPRETER_REEXEC_ENV, None)
+        return runtime_config
+
+    reexec_target = os.environ.get(INTERPRETER_REEXEC_ENV)
+    if reexec_target == str(interpreter_path):
+        raise CliError(
+            "Configured python_interpreter did not become active after relaunch: "
+            f"{interpreter_path} (current interpreter: {current_interpreter})"
+        )
+
+    os.environ[INTERPRETER_REEXEC_ENV] = str(interpreter_path)
+    try:
+        os.execv(
+            str(interpreter_path),
+            [str(interpreter_path), str(Path(__file__).resolve()), *argv],
+        )
+    except OSError as exc:
+        raise CliError(
+            f"Unable to relaunch with python_interpreter {interpreter_path}: {exc}"
+        ) from exc
+
+    return runtime_config
 
 
 def load_config(mode: str, override_path: Path | None) -> dict[str, Any]:
@@ -107,6 +181,33 @@ def load_config(mode: str, override_path: Path | None) -> dict[str, Any]:
     if override_path is not None:
         config.update(read_config_file(override_path))
 
+    return config
+
+
+def apply_local_system_info(
+    config: dict[str, Any], runtime_config: dict[str, Any]
+) -> dict[str, Any]:
+    system_info = runtime_config.get("system_info")
+    additional_info = runtime_config.get("additional_info")
+
+    local_lines: list[str] = []
+    if isinstance(system_info, str) and system_info.strip():
+        local_lines.append(f"System: {system_info.strip()}")
+    if isinstance(additional_info, str) and additional_info.strip():
+        local_lines.append(f"Additional information: {additional_info.strip()}")
+
+    if not local_lines:
+        return config
+
+    system_prompt = config.get("system_prompt")
+    if not isinstance(system_prompt, str):
+        return config
+
+    config = dict(config)
+    local_section = "Local system information:\n" + "\n".join(
+        f"- {line}" for line in local_lines
+    )
+    config["system_prompt"] = f"{system_prompt.rstrip()}\n\n{local_section}".strip()
     return config
 
 
@@ -391,6 +492,14 @@ def run_portkey_request(config: dict[str, Any], user_content: str) -> tuple[int,
         print(f'Set it with: export {api_key_env}="..."', file=sys.stderr)
         return 2, ""
 
+    try:
+        from openai import APIError, APIStatusError, OpenAI
+    except ImportError as exc:
+        raise CliError(
+            "Unable to import the openai package. Set python_interpreter in "
+            f"{LOCAL_RUNTIME_CONFIG} to a Python environment with openai installed."
+        ) from exc
+
     client = OpenAI(base_url=config["base_url"], api_key=api_key)
     params = response_params(config)
     params["instructions"] = config["system_prompt"]
@@ -508,9 +617,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv if argv is not None else sys.argv[1:])
-
     try:
+        raw_argv = argv if argv is not None else sys.argv[1:]
+        runtime_config = ensure_configured_interpreter(raw_argv)
+        args = parse_args(raw_argv)
         mode = args.mode or "lo"
         config = load_config(mode, args.config)
         if args.model:
@@ -519,6 +629,7 @@ def main(argv: list[str] | None = None) -> int:
             config["reasoning_effort"] = args.reasoning_effort
         if args.max_output is not None:
             config["max_output_tokens"] = args.max_output
+        config = apply_local_system_info(config, runtime_config)
         config = validate_config(config)
 
         stdin_text = read_all_stdin()
