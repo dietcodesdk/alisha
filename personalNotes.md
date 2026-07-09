@@ -68,3 +68,21 @@
   context for questions about using Alisha.
 - Keep injected README content out of `.alisha_history.json` to avoid repeated
   history bloat; save a `self_help` boolean on history entries instead.
+
+## 2026-07-09 Local Runtime Config Startup Cost
+
+- Measured local `--help` startup after adding `alisha.local.json` interpreter
+  re-exec:
+  - `system_python_empty`: about `28.6 ms`.
+  - `venv_python_empty`: about `9.2 ms`.
+  - `direct_venv_alisha_help`: about `45.5 ms`.
+  - `global_alisha_help_reexec`: about `100.6 ms`.
+- The added `~55 ms` is expected for the current design. Alisha starts with
+  PATH `python3`, parses enough code to read `alisha.local.json`, validates the
+  configured interpreter, then `execv()` replaces the process with the venv
+  Python and starts Alisha again.
+- This is noticeable for tiny local commands like `--help`, but negligible for
+  real requests where Portkey/OpenAI network latency dominates.
+- A machine-local wrapper that directly invokes the configured venv Python
+  would avoid most of this overhead, but the current approach keeps one
+  portable tracked script.
