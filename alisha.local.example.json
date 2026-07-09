@@ -1,0 +1,5 @@
+{
+  "python_interpreter": "./venv/bin/python3",
+  "system_info": "WSL Ubuntu on Windows 11",
+  "additional_info": "zsh shell; prefer Linux paths and apt commands unless asked otherwise."
+}

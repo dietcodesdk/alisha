@@ -9,8 +9,8 @@ colorized Markdown answer.
 
 ## Requirements
 
-- Python virtualenv at `./venv`
-- Python packages from `requirements.txt` installed in that virtualenv,
+- Python 3 available on `PATH` to start the launcher
+- A Python environment with packages from `requirements.txt` installed,
   including `openai` and `rich`
 - `PORTKEY_API_KEY` exported in the shell
 
@@ -44,8 +44,8 @@ Run the project-local script directly before installing the global command:
 
 ## Configuration
 
-Shared runtime defaults live in `config.json` beside the script. Quick modes
-live in `lo.json`, `med.json`, and `hi.json`.
+Shared API/request defaults live in `config.json` beside the script. Quick
+modes live in `lo.json`, `med.json`, and `hi.json`.
 
 Important fields:
 
@@ -96,6 +96,50 @@ Formatted output is always colorized, including when stdout is redirected or
 piped. Redirected and piped runs do not stream partial raw output; they emit
 only the final formatted answer. Saved history remains the raw assistant answer
 and does not include ANSI codes or terminal-control output.
+
+## Local Runtime Config
+
+Machine-specific startup settings live in `alisha.local.json`. This file is
+ignored by git. Start from the tracked template:
+
+```sh
+cp alisha.local.example.json alisha.local.json
+```
+
+Fields:
+
+- `python_interpreter`: Python executable Alisha should relaunch with before
+  importing the OpenAI SDK. Relative paths resolve from this project directory.
+- `system_info`: plain-language operating environment, sent with each request
+  so Alisha can tailor commands.
+- `additional_info`: optional plain-language details such as shell, package
+  manager, path conventions, hardware, or command preferences.
+
+Examples:
+
+```json
+{
+  "python_interpreter": "./venv/bin/python3",
+  "system_info": "WSL Ubuntu on Windows 11",
+  "additional_info": "zsh shell; prefer apt for system packages and Linux paths."
+}
+```
+
+```json
+{
+  "python_interpreter": "/home/alex/tools/alisha/.venv/bin/python3",
+  "system_info": "Bare metal Arch Linux",
+  "additional_info": "fish shell; prefer pacman for system packages."
+}
+```
+
+```json
+{
+  "python_interpreter": "/Users/alex/tools/alisha/.venv/bin/python3",
+  "system_info": "macOS on Apple Silicon",
+  "additional_info": "zsh shell; prefer Homebrew commands where appropriate."
+}
+```
 
 ## Self Help
 
@@ -181,7 +225,7 @@ The intended global command is a symlink:
 
 ```sh
 sudo rm -f /usr/local/bin/alisha
-sudo ln -s /home/van/tools/alisha/alisha /usr/local/bin/alisha
+sudo ln -s "$(pwd)/alisha" /usr/local/bin/alisha
 ```
 
 `/usr/local/bin` is preferred for this local custom command.
@@ -189,6 +233,7 @@ sudo ln -s /home/van/tools/alisha/alisha /usr/local/bin/alisha
 ## Development Checks
 
 ```sh
+python3 -m py_compile alisha
 ./alisha --help
 ./alisha
 ./alisha -f README.md "summarize"

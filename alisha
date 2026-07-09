@@ -1,4 +1,4 @@
-#!/home/van/tools/alisha/venv/bin/python3
+#!/usr/bin/env python3
 """
 alisha: streaming terminal assistant backed by Portkey's OpenAI-compatible API.
 """
@@ -14,15 +14,7 @@ import sys
 import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
-
-from openai import APIError, APIStatusError, OpenAI
-from rich.console import Console
-from rich.live import Live
-from rich.markdown import Markdown
-from rich.panel import Panel
-from rich.text import Text
-from rich.theme import Theme
+from typing import Any, Optional, Union
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -67,73 +59,147 @@ CONFIGURABLE_RESPONSE_PARAMS = (
 REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
 MODES = ("lo", "med", "hi")
 HISTORY_LIMIT = 20
+LOCAL_RUNTIME_CONFIG = "alisha.local.json"
+INTERPRETER_REEXEC_ENV = "ALISHA_INTERPRETER_REEXEC"
 BLOCKQUOTE_RE = re.compile(r"^\s*>\s?(.*)$")
 ADMONITION_RE = re.compile(r"^\s*(note|warning|tip|important|caution)\s*:\s*", re.I)
 
-FORMAT_THEME = Theme(
-    {
-        "markdown.h1": "bold bright_cyan",
-        "markdown.h2": "bold cyan",
-        "markdown.h3": "bold green",
-        "markdown.h4": "bold green",
-        "markdown.strong": "bold bright_white",
-        "markdown.em": "italic bright_yellow",
-        "markdown.code": "bold bright_magenta",
-        "markdown.code_block": "bright_white on grey15",
-        "markdown.item.bullet": "bright_cyan",
-        "markdown.item.number": "bright_cyan",
-        "markdown.block_quote": "bright_yellow",
-        "markdown.link": "underline bright_blue",
-        "markdown.hr": "bright_black",
-        "alisha.panel": "bright_yellow",
-        "alisha.panel.note": "bright_cyan",
-        "alisha.panel.warning": "bold yellow",
-        "alisha.panel.tip": "bright_green",
-        "alisha.panel.important": "bold magenta",
-        "alisha.panel.caution": "bold red",
-    }
-)
+FORMAT_THEME_STYLES = {
+    "markdown.h1": "bold bright_cyan",
+    "markdown.h2": "bold cyan",
+    "markdown.h3": "bold green",
+    "markdown.h4": "bold green",
+    "markdown.strong": "bold bright_white",
+    "markdown.em": "italic bright_yellow",
+    "markdown.code": "bold bright_magenta",
+    "markdown.code_block": "bright_white on grey15",
+    "markdown.item.bullet": "bright_cyan",
+    "markdown.item.number": "bright_cyan",
+    "markdown.block_quote": "bright_yellow",
+    "markdown.link": "underline bright_blue",
+    "markdown.hr": "bright_black",
+    "alisha.panel": "bright_yellow",
+    "alisha.panel.note": "bright_cyan",
+    "alisha.panel.warning": "bold yellow",
+    "alisha.panel.tip": "bright_green",
+    "alisha.panel.important": "bold magenta",
+    "alisha.panel.caution": "bold red",
+}
 
 
 class CliError(Exception):
     """Expected command-line/configuration error."""
 
 
+def project_file_path(name: str) -> Path:
+    return Path(__file__).resolve().with_name(name)
+
+
+def project_dir() -> Path:
+    return Path(__file__).resolve().parent
+
+
 def default_config_path() -> Path:
-    return Path(__file__).resolve().with_name("config.json")
+    return project_file_path("config.json")
 
 
 def mode_config_path(mode: str) -> Path:
-    return Path(__file__).resolve().with_name(f"{mode}.json")
+    return project_file_path(f"{mode}.json")
 
 
 def history_path() -> Path:
-    return Path(__file__).resolve().with_name(".alisha_history.json")
+    return project_file_path(".alisha_history.json")
 
 
 def self_help_path() -> Path:
-    return Path(__file__).resolve().with_name("README.md")
+    return project_file_path("README.md")
 
 
-def read_config_file(path: Path) -> dict[str, Any]:
+def local_runtime_config_path() -> Path:
+    return project_file_path(LOCAL_RUNTIME_CONFIG)
+
+
+def read_json_object_file(path: Path, label: str) -> dict[str, Any]:
     if not path.exists():
         return {}
 
     try:
         with path.open("r", encoding="utf-8") as handle:
-            user_config = json.load(handle)
+            data = json.load(handle)
     except json.JSONDecodeError as exc:
-        raise CliError(f"Invalid JSON in config {path}: {exc}") from exc
+        raise CliError(f"Invalid JSON in {label} {path}: {exc}") from exc
     except OSError as exc:
-        raise CliError(f"Unable to read config {path}: {exc}") from exc
+        raise CliError(f"Unable to read {label} {path}: {exc}") from exc
 
-    if not isinstance(user_config, dict):
-        raise CliError(f"Config {path} must contain a JSON object.")
+    if not isinstance(data, dict):
+        raise CliError(f"{label.title()} {path} must contain a JSON object.")
 
-    return user_config
+    return data
 
 
-def load_config(mode: str, override_path: Path | None) -> dict[str, Any]:
+def read_config_file(path: Path) -> dict[str, Any]:
+    return read_json_object_file(path, "config")
+
+
+def read_local_runtime_config() -> dict[str, Any]:
+    config = read_json_object_file(local_runtime_config_path(), "local runtime config")
+
+    for name in ("python_interpreter", "system_info", "additional_info"):
+        value = config.get(name)
+        if value is not None and not isinstance(value, str):
+            raise CliError(f"{name} in {LOCAL_RUNTIME_CONFIG} must be a string.")
+
+    return config
+
+
+def resolve_local_path(path_text: str) -> Path:
+    path = Path(path_text).expanduser()
+    if not path.is_absolute():
+        path = project_dir() / path
+    return Path(os.path.abspath(path))
+
+
+def ensure_configured_interpreter(argv: list[str]) -> dict[str, Any]:
+    runtime_config = read_local_runtime_config()
+    interpreter_text = runtime_config.get("python_interpreter")
+    if not isinstance(interpreter_text, str) or not interpreter_text.strip():
+        return runtime_config
+
+    interpreter_path = resolve_local_path(interpreter_text.strip())
+    if not interpreter_path.exists():
+        raise CliError(f"python_interpreter not found: {interpreter_path}")
+    if not interpreter_path.is_file():
+        raise CliError(f"python_interpreter is not a file: {interpreter_path}")
+    if not os.access(interpreter_path, os.X_OK):
+        raise CliError(f"python_interpreter is not executable: {interpreter_path}")
+
+    current_interpreter = Path(os.path.abspath(sys.executable))
+    if current_interpreter == interpreter_path:
+        os.environ.pop(INTERPRETER_REEXEC_ENV, None)
+        return runtime_config
+
+    reexec_target = os.environ.get(INTERPRETER_REEXEC_ENV)
+    if reexec_target == str(interpreter_path):
+        raise CliError(
+            "Configured python_interpreter did not become active after relaunch: "
+            f"{interpreter_path} (current interpreter: {current_interpreter})"
+        )
+
+    os.environ[INTERPRETER_REEXEC_ENV] = str(interpreter_path)
+    try:
+        os.execv(
+            str(interpreter_path),
+            [str(interpreter_path), str(Path(__file__).resolve()), *argv],
+        )
+    except OSError as exc:
+        raise CliError(
+            f"Unable to relaunch with python_interpreter {interpreter_path}: {exc}"
+        ) from exc
+
+    return runtime_config
+
+
+def load_config(mode: str, override_path: Optional[Path]) -> dict[str, Any]:
     config = dict(DEFAULT_CONFIG)
 
     for path in (default_config_path(), mode_config_path(mode)):
@@ -142,6 +208,33 @@ def load_config(mode: str, override_path: Path | None) -> dict[str, Any]:
     if override_path is not None:
         config.update(read_config_file(override_path))
 
+    return config
+
+
+def apply_local_system_info(
+    config: dict[str, Any], runtime_config: dict[str, Any]
+) -> dict[str, Any]:
+    system_info = runtime_config.get("system_info")
+    additional_info = runtime_config.get("additional_info")
+
+    local_lines: list[str] = []
+    if isinstance(system_info, str) and system_info.strip():
+        local_lines.append(f"System: {system_info.strip()}")
+    if isinstance(additional_info, str) and additional_info.strip():
+        local_lines.append(f"Additional information: {additional_info.strip()}")
+
+    if not local_lines:
+        return config
+
+    system_prompt = config.get("system_prompt")
+    if not isinstance(system_prompt, str):
+        return config
+
+    config = dict(config)
+    local_section = "Local system information:\n" + "\n".join(
+        f"- {line}" for line in local_lines
+    )
+    config["system_prompt"] = f"{system_prompt.rstrip()}\n\n{local_section}".strip()
     return config
 
 
@@ -238,7 +331,9 @@ def read_all_stdin() -> str:
     return sys.stdin.read()
 
 
-def read_text_file(path_text: str | Path, max_bytes: int | None) -> tuple[str, bool]:
+def read_text_file(
+    path_text: Union[str, Path], max_bytes: Optional[int]
+) -> tuple[str, bool]:
     path = Path(path_text).expanduser()
 
     if not path.exists():
@@ -265,7 +360,7 @@ def build_user_content(
     stdin_text: str,
     include_stdin: bool,
     include_self_help: bool,
-    file_context_max_bytes: int | None,
+    file_context_max_bytes: Optional[int],
 ) -> str:
     question = " ".join(prompt_parts).strip()
     sections: list[str] = []
@@ -299,7 +394,7 @@ def build_user_content(
     return "\n\n".join(sections).strip()
 
 
-def load_history(path: Path | None = None) -> list[dict[str, Any]]:
+def load_history(path: Optional[Path] = None) -> list[dict[str, Any]]:
     path = path or history_path()
     if not path.exists():
         return []
@@ -360,7 +455,7 @@ def save_history_entry(
     mode: str,
     model: str,
     self_help: bool,
-    path: Path | None = None,
+    path: Optional[Path] = None,
 ) -> None:
     answer = answer.strip()
     if not answer:
@@ -409,12 +504,37 @@ def response_params(config: dict[str, Any]) -> dict[str, Any]:
     return params
 
 
-def formatted_console() -> Console:
-    return Console(
+def load_rich_components() -> dict[str, Any]:
+    try:
+        from rich.console import Console
+        from rich.live import Live
+        from rich.markdown import Markdown
+        from rich.panel import Panel
+        from rich.text import Text
+        from rich.theme import Theme
+    except ImportError as exc:
+        raise CliError(
+            "Unable to import the rich package. Install project dependencies in "
+            "the configured python_interpreter environment."
+        ) from exc
+
+    return {
+        "Console": Console,
+        "Live": Live,
+        "Markdown": Markdown,
+        "Panel": Panel,
+        "Text": Text,
+        "Theme": Theme,
+    }
+
+
+def formatted_console() -> Any:
+    rich = load_rich_components()
+    return rich["Console"](
         file=sys.stdout,
         force_terminal=True,
         color_system="auto",
-        theme=FORMAT_THEME,
+        theme=rich["Theme"](FORMAT_THEME_STYLES),
         highlight=True,
     )
 
@@ -454,32 +574,35 @@ def wrapped_preview_lines(answer: str, width: int, max_lines: int) -> list[str]:
     return visual_lines[-max_lines:]
 
 
-def live_preview_text(answer: str, width: int, max_lines: int) -> Text:
+def live_preview_text(answer: str, width: int, max_lines: int) -> Any:
+    rich = load_rich_components()
     preview = "\n".join(wrapped_preview_lines(answer or " ", width, max_lines))
-    return Text(preview or " ", overflow="crop")
+    return rich["Text"](preview or " ", overflow="crop")
 
 
-def blank_live_preview(max_lines: int) -> Text:
-    return Text("\n".join("" for _ in range(max(1, max_lines))), overflow="crop")
+def blank_live_preview(max_lines: int) -> Any:
+    rich = load_rich_components()
+    return rich["Text"]("\n".join("" for _ in range(max(1, max_lines))), overflow="crop")
 
 
 class StreamingAnswerDisplay:
     def __init__(
         self,
         enabled: bool,
-        console: Console | None = None,
-        max_lines: int | None = None,
+        console: Optional[Any] = None,
+        max_lines: Optional[int] = None,
     ) -> None:
         self.enabled = enabled
         self.console = console or formatted_console()
         self.answer = ""
-        self.live: Live | None = None
+        self.live: Optional[Any] = None
         self.max_lines = max_lines or default_live_preview_lines()
 
     def start(self) -> None:
         if not self.enabled:
             return
-        self.live = Live(
+        rich = load_rich_components()
+        self.live = rich["Live"](
             live_preview_text(self.answer, self.console.width, self.max_lines),
             console=self.console,
             transient=True,
@@ -559,7 +682,8 @@ def split_markdown_and_panels(answer: str) -> list[tuple[str, str]]:
     return segments
 
 
-def panel_from_blockquote(content: str) -> Panel:
+def panel_from_blockquote(content: str) -> Any:
+    rich = load_rich_components()
     title = "Quote"
     border_style = "alisha.panel"
 
@@ -570,8 +694,8 @@ def panel_from_blockquote(content: str) -> Panel:
         border_style = f"alisha.panel.{kind}"
         content = content[admonition_match.end() :].lstrip()
 
-    return Panel(
-        Markdown(content or " ", code_theme="monokai"),
+    return rich["Panel"](
+        rich["Markdown"](content or " ", code_theme="monokai"),
         title=f" {title} ",
         border_style=border_style,
         padding=(0, 1),
@@ -583,12 +707,13 @@ def print_formatted_answer(answer: str) -> None:
         return
 
     console = formatted_console()
+    rich = load_rich_components()
     console.print("\n")
     for kind, content in split_markdown_and_panels(answer):
         if kind == "panel":
             console.print(panel_from_blockquote(content))
         else:
-            console.print(Markdown(content, code_theme="monokai"))
+            console.print(rich["Markdown"](content, code_theme="monokai"))
     console.print()
 
 
@@ -615,13 +740,21 @@ def run_portkey_request(config: dict[str, Any], user_content: str) -> tuple[int,
         print(f'Set it with: export {api_key_env}="..."', file=sys.stderr)
         return 2, ""
 
+    try:
+        from openai import APIError, APIStatusError, OpenAI
+    except ImportError as exc:
+        raise CliError(
+            "Unable to import the openai package. Set python_interpreter in "
+            f"{LOCAL_RUNTIME_CONFIG} to a Python environment with openai installed."
+        ) from exc
+
     client = OpenAI(base_url=config["base_url"], api_key=api_key)
     params = response_params(config)
     params["instructions"] = config["system_prompt"]
     params["input"] = user_content
 
     answer_parts: list[str] = []
-    stream_display: StreamingAnswerDisplay | None = None
+    stream_display: Optional[StreamingAnswerDisplay] = None
     try:
         if config["stream"]:
             stream_display = StreamingAnswerDisplay(should_use_live_stream(sys.stdout))
@@ -743,10 +876,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv if argv is not None else sys.argv[1:])
-
+def main(argv: Optional[list[str]] = None) -> int:
     try:
+        raw_argv = argv if argv is not None else sys.argv[1:]
+        runtime_config = ensure_configured_interpreter(raw_argv)
+        args = parse_args(raw_argv)
         mode = args.mode or "lo"
         config = load_config(mode, args.config)
         if args.model:
@@ -755,6 +889,7 @@ def main(argv: list[str] | None = None) -> int:
             config["reasoning_effort"] = args.reasoning_effort
         if args.max_output is not None:
             config["max_output_tokens"] = args.max_output
+        config = apply_local_system_info(config, runtime_config)
         config = validate_config(config)
 
         stdin_text = read_all_stdin()
