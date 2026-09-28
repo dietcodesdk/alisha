@@ -1,5 +1,52 @@
 # Personal Notes
 
+## Current Implementation Snapshot (Verified 2026-09-24)
+
+The executable is still a single Python file, `alisha`. Its current request
+path uses the OpenAI Python SDK's Responses API against the configured Portkey
+base URL. `portkey-ai` remains pinned in `requirements.txt`, but the script
+does not import it. The README is also the context source for `-s/--self`.
+
+Current checked-in mode presets are:
+
+- `lo`: `@personal-openai/gpt-5-nano`, minimal reasoning, low verbosity, 1000
+  output tokens.
+- `med`: `@personal-openai/gpt-5-mini`, medium reasoning and verbosity, 2800
+  output tokens.
+- `hi`: `@personal-openai/gpt-5.4`, high reasoning and verbosity, 8000 output
+  tokens, and Responses API web search with high search context.
+
+The launch sequence reads optional `alisha.local.json` before parsing command
+options. If `python_interpreter` points to a different executable, the script
+replaces itself with that interpreter and starts again. The shared config is
+merged first, then the selected mode JSON, then an optional `--config` file;
+CLI model, reasoning, and token-limit options apply last. Local system notes
+are appended to the configured system prompt.
+
+Prompt construction joins positional words, adds each selected text file under
+its own byte limit, and optionally adds piped stdin. Piped stdin is included
+automatically only when there are no prompt words; `--stdin` includes it with a
+prompt. A prompt or non-empty stdin is still required when files are supplied.
+Self-help README content is sent to the model but left out of the stored
+history question. Successful non-empty answers are stored raw in the
+project-local `.alisha_history.json`; with a prompt, `--history N` sends earlier
+exchanges as context. Without a prompt, files, or non-empty stdin, it displays
+the latest N saved questions and answers locally and exits without an API call.
+Treat that file as potentially sensitive because it can contain prompt, file,
+and stdin contents.
+
+For streaming requests, only an interactive stdout gets a bounded live preview.
+After success Alisha clears the preview and prints the final Rich Markdown
+answer. Piped or redirected output skips the preview but still gets Rich's
+forced color formatting. With streaming disabled, the whole response is
+collected before formatting. API errors and interrupts may print partial raw
+text instead of the formatted final answer.
+
+The dated entries below preserve investigation and design history. In
+particular, the 2026-05-05 planned model routes and the 2026-05-11 suggested
+`gpt-5.5` fallback were plans at that time; the preset values above are the
+current checked-in configuration and supersede those plans.
+
 ## 2026-05-04 Rebuild
 
 - Existing `/usr/local/bin/alisha` was a regular Python script owned by
@@ -35,8 +82,9 @@
   use `max_completion_tokens` for `--m/--max-output`.
 - Added `--reasoning-effort` for per-request overrides while keeping high
   reasoning as the default config.
-- Portkey rejected `reasoning_effort: "minimal"` for the current model route;
-  local validation allows only `none`, `low`, `medium`, `high`, and `xhigh`.
+- At that point Portkey rejected `reasoning_effort: "minimal"` for the active
+  route, so local validation then allowed only `none`, `low`, `medium`,
+  `high`, and `xhigh`. The current validator also accepts `minimal`.
 
 ## 2026-05-05 Quick Modes
 

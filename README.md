@@ -27,6 +27,7 @@ alisha "explain this error"
 alisha --lo "what is the git command to switch branches?"
 alisha -s "how do I send you input from another command?"
 alisha --history 3 "continue from the recent Alisha context"
+alisha --history 3
 alisha --med -f app.py "review this file"
 alisha --hi --m 8000 "design this carefully"
 alisha --hi "what changed in the OpenAI API this week?"
@@ -62,12 +63,34 @@ Important fields:
 
 Mode defaults:
 
-- `--lo`: fastest and cheapest; nano model, no reasoning, low verbosity, 1000 tokens.
-- `--med`: balanced; mini model, medium reasoning, medium verbosity, 2800 tokens.
-- `--hi`: highest quality; GPT-5.5 route, xhigh reasoning, high verbosity,
-  web search enabled, 8000 tokens.
+- `--lo`: `@personal-openai/gpt-5-nano`, minimal reasoning, low verbosity,
+  1000 output tokens.
+- `--med`: `@personal-openai/gpt-5-mini`, medium reasoning, medium verbosity,
+  2800 output tokens.
+- `--hi`: `@personal-openai/gpt-5.4`, high reasoning, high verbosity,
+  web search enabled, 8000 output tokens.
 
 Plain `alisha ...` uses `--lo`.
+
+## Command Options
+
+- `-f FILE`, `--file FILE`: add a text file as context; repeat to add more.
+- `--stdin`: append piped stdin even when a prompt was also supplied. When no
+  prompt is given, piped stdin is used automatically.
+- `-s`, `--self`: add this README as self-help context for this request.
+- `--history N`: with a prompt, include the latest N saved exchanges as
+  context; without a prompt, file, or piped stdin, display those saved
+  questions and answers. N can be 0 to 20. The default is 0.
+- `--config PATH`: load an additional JSON config after the default and mode
+  config files.
+- `--model MODEL`: override the selected model route for this run.
+- `--reasoning-effort LEVEL`: override reasoning with `none`, `minimal`,
+  `low`, `medium`, `high`, or `xhigh`.
+- `--m N`, `--max-output N`: override the positive output-token limit.
+
+The prompt is assembled from positional prompt words, selected files, and
+stdin. A question or stdin content is required; a file by itself is not a
+request. Each file is limited independently by `file_context_max_bytes`.
 
 ## Terminal Formatting
 
@@ -172,6 +195,16 @@ context:
 alisha --history 2 "use the recent context"
 ```
 
+Use `--history N` by itself to display the most recent saved questions and
+answers locally, without making an API request:
+
+```sh
+alisha --history 3
+```
+
+The viewer prints exchanges in chronological order. If there are no saved
+exchanges, it prints `No saved history yet.`
+
 The saved question is the full assembled request context, including file and
 stdin contents when provided.
 
@@ -194,12 +227,13 @@ stdin contents when provided.
 CLI flags override config values for a single run:
 
 ```sh
-alisha --model @personal-openai/gpt-5.4-mini --m 400 "answer briefly"
+alisha --model @personal-openai/gpt-5-mini --m 400 "answer briefly"
 alisha --reasoning-effort high --m 5000 "solve carefully"
 alisha --config ./other-config.json "use alternate defaults"
 ```
 
-For high reasoning with this Portkey Responses route, set:
+The current `--hi` preset uses high reasoning. Config or CLI overrides can
+select another supported effort; for example:
 
 ```json
 "reasoning_effort": "high"
@@ -221,11 +255,12 @@ source ~/.zshrc
 
 ## Install
 
-The intended global command is a symlink:
+The project-local executable can be used directly. To make it available as a
+global command, create a symlink using the absolute path to this checkout and
+a destination that is not already occupied:
 
 ```sh
-sudo rm -f /usr/local/bin/alisha
-sudo ln -s "$(pwd)/alisha" /usr/local/bin/alisha
+sudo ln -s /home/your-user/tools/alisha/alisha /usr/local/bin/alisha
 ```
 
 `/usr/local/bin` is preferred for this local custom command.
@@ -235,8 +270,8 @@ sudo ln -s "$(pwd)/alisha" /usr/local/bin/alisha
 ```sh
 python3 -m py_compile alisha
 ./alisha --help
-./alisha
-./alisha -f README.md "summarize"
+./venv/bin/python -m unittest discover -s tests
 ```
 
-The final check requires `PORTKEY_API_KEY`.
+The unit tests do not make API requests. Running a real prompt, such as
+`./alisha "hello"`, requires `PORTKEY_API_KEY` to be set.

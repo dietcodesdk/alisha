@@ -707,6 +707,13 @@ def print_formatted_answer(answer: str) -> None:
         return
 
     console = formatted_console()
+    render_formatted_answer(console, answer)
+
+
+def render_formatted_answer(console: Any, answer: str) -> None:
+    if not answer.strip():
+        return
+
     rich = load_rich_components()
     console.print("\n")
     for kind, content in split_markdown_and_panels(answer):
@@ -715,6 +722,25 @@ def print_formatted_answer(answer: str) -> None:
         else:
             console.print(rich["Markdown"](content, code_theme="monokai"))
     console.print()
+
+
+def print_history_answers(entries: list[dict[str, Any]], count: int) -> None:
+    selected = entries[-count:] if count > 0 else []
+    if not selected:
+        print("No saved history yet.")
+        return
+
+    rich = load_rich_components()
+    console = formatted_console()
+    first_number = len(entries) - len(selected) + 1
+    for index, entry in enumerate(selected, start=first_number):
+        created_at = entry.get("created_at")
+        heading = f"Question {index}"
+        if isinstance(created_at, str) and created_at:
+            heading += f" · {created_at}"
+        console.print(rich["Text"](heading, style="bold bright_cyan"))
+        console.print(rich["Text"](entry["question"]))
+        render_formatted_answer(console, entry["answer"])
 
 
 def print_non_streamed_response(response: Any) -> str:
@@ -881,6 +907,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         raw_argv = argv if argv is not None else sys.argv[1:]
         runtime_config = ensure_configured_interpreter(raw_argv)
         args = parse_args(raw_argv)
+        stdin_text = read_all_stdin()
+        if (
+            args.history > 0
+            and not args.prompt
+            and not args.files
+            and not stdin_text
+        ):
+            print_history_answers(load_history(), args.history)
+            return 0
+
         mode = args.mode or "lo"
         config = load_config(mode, args.config)
         if args.model:
@@ -892,7 +928,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         config = apply_local_system_info(config, runtime_config)
         config = validate_config(config)
 
-        stdin_text = read_all_stdin()
         include_stdin = bool(args.stdin or (not args.prompt and stdin_text))
         user_content = build_user_content(
             prompt_parts=args.prompt,
